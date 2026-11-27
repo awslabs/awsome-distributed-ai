@@ -157,7 +157,7 @@ def level_summary(level, ceiling=None):
 
 def bound_lines(ceiling):
     if not ceiling:
-        return ['MBU needs your memory-read ceiling: run bash tools/hold-and-measure.sh, then this tool again.']
+        return ['MBU needs your memory-read ceiling: run bash tools/measure-ceilings.sh, then this tool again.']
     read = WEIGHT_BYTES / ceiling
     return [f'Reading the weights ({WEIGHT_BYTES / 1e9:.2f} GB) at your memory-read ceiling '
             f'({ceiling / 1e9:.0f} GB/s per GPU) takes {read * 1e3:.2f} ms.',
@@ -293,7 +293,7 @@ def measure(process, run_dir, record, summaries, servers, gpus, env, ceiling, *,
     return 0
 
 
-def run(env=None, state=None, *, popen=subprocess.Popen, runner=subprocess.run, health=answers,
+def run(env=None, *, popen=subprocess.Popen, runner=subprocess.run, health=answers,
         request=decode_request, snap=snapshot, clock=time.monotonic, sleep=time.sleep, out=print, hostname=None):
     """tools/serve.sh. Returns the exit code."""
     env = dict(os.environ if env is None else env)
@@ -306,13 +306,6 @@ def run(env=None, state=None, *, popen=subprocess.Popen, runner=subprocess.run, 
     problem = image_problem(image, nodes)
     if problem:
         print(problem, file=sys.stderr)
-        return 2
-    if workshop.read_running(state):
-        print('AIM347: a stage is still running. Run this tool after it finishes; '
-              'bash tools/run.sh attach follows it.', file=sys.stderr)
-        return 2
-    if workshop.read_serving(state):
-        print('AIM347: tools/serve.sh is already running in another shell.', file=sys.stderr)
         return 2
 
     def say(*values, **kwargs):
@@ -333,12 +326,9 @@ def run(env=None, state=None, *, popen=subprocess.Popen, runner=subprocess.run, 
     record = dict(model_id=config['model_id'], model_revision=config['model_revision'], vllm_version='0.20.2',
                   image=str(image), servers=servers, tensor_parallel_size=1, output_tokens=OUTPUT_TOKENS,
                   rounds=ROUNDS, prompt=PROMPT, weight_bytes=WEIGHT_BYTES,
-                  memory_read_bytes_per_second_per_gpu=ceiling, allocation_id=env.get('AIM347_ALLOCATION_ID'),
+                  memory_read_bytes_per_second_per_gpu=ceiling, allocation_id=env.get('SLURM_JOB_ID'),
                   start_utc=time.time(), levels=[])
     launch_env = dict(env, VLLM_IMAGE=str(image), SERVING_RUN=run_dir.name)
-    # run.sh and nccl-protocols.sh refuse to start while this marker names a live process.
-    marker = Path(state or workshop.STATE) / 'serving'
-    workshop.write_atomic(marker, json.dumps(dict(pid=os.getpid(), run=run_dir.name)))
     with (run_dir / 'launch.log').open('w') as log:
         process = popen(launch_command(), cwd=str(LAB), env=launch_env, stdin=subprocess.DEVNULL, stdout=log,
                         stderr=subprocess.STDOUT, start_new_session=True)
@@ -353,7 +343,6 @@ def run(env=None, state=None, *, popen=subprocess.Popen, runner=subprocess.run, 
         say('[aim347] stopping the servers', flush=True)
         status = stop_servers(process, env.get('SLURM_JOB_ID', ''), runner=runner,
                               hostname=hostname or socket.gethostname(), sleep=sleep)
-        marker.unlink(missing_ok=True)
         record.update(end_utc=time.time(), exit_status=code, serving_step_exit=status)
         workshop.write_atomic(run_dir / 'serving.json', json.dumps(record, indent=2) + '\n')
         say('[aim347] the servers have stopped and the GPUs are free' if status == 0 else

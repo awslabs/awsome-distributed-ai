@@ -85,7 +85,7 @@ def denominator_lines(ceilings, gpus, world):
                      f"for {gpu}{', estimated from NVIDIA specifications' if estimated else ''})")
     lines.append('Share of your GEMM peak: the same FLOP per second / '
                  + (f"({world} x your GEMM peak, {ceilings['gemm_tflops_per_gpu']:.1f} TFLOP/s per GPU)" if ceilings
-                    else 'n/a (run bash tools/hold-and-measure.sh)'))
+                    else 'n/a (run bash tools/measure-ceilings.sh)'))
     return lines
 
 

@@ -3,7 +3,7 @@ lib/serve_llm.py and prepare-event.sh --with-serving. Standard library only.
 
 No server runs: vLLM, Slurm and the servers' counters are replaced by fakes. Step times
 in these fixtures are synthetic, not measurements. The memory-read ceiling of 663 GB/s
-is the median recorded by hold-and-measure.sh on two g7.48xlarge on 2026-11-03.
+is the median recorded by measure-ceilings.sh on two g7.48xlarge on 2026-11-03.
 """
 from contextlib import redirect_stderr
 import io
@@ -83,7 +83,7 @@ class DecodeMeasurementTests(unittest.TestCase):
         self.assertEqual(lines, [
             'Reading the weights (3.42 GB) at your memory-read ceiling (663 GB/s per GPU) takes 5.16 ms.',
             'At 5.16 ms per step, a GPU with one request generates 194 tokens/s. MBU is 5.16 ms / ms per step.'])
-        self.assertIn('run bash tools/hold-and-measure.sh', serving_decode.bound_lines(None)[0])
+        self.assertIn('run bash tools/measure-ceilings.sh', serving_decode.bound_lines(None)[0])
 
     def test_step_is_found_by_host_and_srun_pid(self):
         text = ('StepId=42.0 UserId=1000 State=COMPLETED SrunHost:Pid=login-1:4242 Name=check\n'
@@ -183,18 +183,17 @@ class ServeRunTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         root = Path(self.directory.name)
-        self.results, self.state, home = root / 'results', root / 'state', root / 'home'
+        self.results, home = root / 'results', root / 'home'
         (self.results / 'ceilings').mkdir(parents=True)
         (self.results / 'ceilings' / 'ceilings.json').write_text(json.dumps(
             dict(gemm_tflops_per_gpu=167.9e0, memory_read_bytes_per_second_per_gpu=CEILING)))
-        self.state.mkdir()
         self.image = home / 'images' / serving_decode.IMAGE_NAME
         self.image.parent.mkdir(parents=True)
         self.image.write_text('image')
         Path(f'{self.image}.sha256').write_text(f'hash  {self.image}\n')
         Path(f'{self.image}.verified').write_text('gpu-node-1 OK t\ngpu-node-2 OK t\n')
         self.env = dict(LLM_RESULTS_DIR=str(self.results), AIM347_HOME=str(home), GPUS_PER_NODE='8',
-                        SLURM_JOB_ID='42', SLURM_JOB_NUM_NODES='2', AIM347_ALLOCATION_ID='42',
+                        SLURM_JOB_ID='42', SLURM_JOB_NUM_NODES='2',
                         SLURM_JOB_NODELIST='gpu-node-[1-2]', SLURM_JOB_CPUS_PER_NODE='192(x2)')
         self.endpoints = [f'http://10.0.0.{node + 1}:{8100 + gpu}' for node in range(2) for gpu in range(8)]
         self.servers = FakeServers(self.endpoints, dict.fromkeys(self.endpoints, 0.009))
@@ -241,7 +240,7 @@ class ServeRunTests(unittest.TestCase):
                        request=self.servers.request, snap=self.servers.snapshot, clock=self.clock,
                        sleep=lambda seconds: None, out=self.out, hostname='login-1')
         options.update(overrides)
-        return serving_decode.run(self.env, self.state, **options)
+        return serving_decode.run(self.env, **options)
 
     def test_serves_measures_every_level_and_stops_the_step(self):
         self.assertEqual(self.run_tool(), 0)
@@ -321,36 +320,13 @@ class ServeRunTests(unittest.TestCase):
 
         self.assertEqual(self.run_tool(request=request, out=out), 130)
         self.assertIn(['scancel', '--signal=TERM', '42.5'], self.calls)
-        self.assertFalse((self.state / 'serving').exists())
 
-    def test_keeps_a_marker_while_the_servers_run(self):
-        seen = []
-
-        def request(endpoint, tokens=serving_decode.OUTPUT_TOKENS):
-            seen.append(serving_decode.workshop.read_serving(self.state))
-            return self.servers.request(endpoint, tokens)
-
-        stderr = io.StringIO()
-        with redirect_stderr(stderr):
-            self.assertEqual(self.run_tool(request=request), 0)
-        self.assertEqual(seen[0]['pid'], os.getpid())
-        self.assertFalse((self.state / 'serving').exists())
-        # A second serve.sh refuses while the first one's marker names a live process.
-        (self.state / 'serving').write_text(json.dumps(dict(pid=os.getpid(), run='serving-x')))
-        with redirect_stderr(stderr):
-            self.assertEqual(self.run_tool(), 2)
-        self.assertIn('AIM347: tools/serve.sh is already running in another shell.', stderr.getvalue())
-        self.assertEqual(len(self.launches), 1)
-
-    def test_refuses_without_the_image_and_while_a_stage_runs(self):
+    def test_refuses_without_the_image(self):
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             self.assertEqual(self.run_tool(), 0)
-            (self.state / 'running').write_text(json.dumps(dict(pid=os.getpid(), stages=['efa'], invocation='x')))
-            self.assertEqual(self.run_tool(), 2)
             self.image.unlink()
             self.assertEqual(self.run_tool(), 2)
-        self.assertIn('a stage is still running', stderr.getvalue())
         self.assertIn('Provisioning imports it only when facilitator/prepare-event.sh runs with --with-serving',
                       stderr.getvalue())
         self.assertEqual(len(self.launches), 1)

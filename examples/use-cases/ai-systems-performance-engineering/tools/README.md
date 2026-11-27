@@ -3,35 +3,20 @@
 These tools run one SmolLM2-1.7B training job with PyTorch FSDP2 on two `g7.48xlarge` nodes (16 GPUs) of an AWS PCS Slurm cluster and change it one setting at a time. Each run is measured the same way, so its result can be compared with the earlier runs. The workshop uses them in this order:
 
 1. `bash tools/check.sh` checks the nodes, GPUs, EFA devices, FSx for Lustre, the training image, the data, the monitoring stack and the Grafana sign-in.
-2. `bash tools/hold-and-measure.sh` holds both GPU nodes for the session and measures each GPU's GEMM and memory-read ceilings.
-3. `bash tools/run.sh <subcommand>` runs one stage of the job on the held nodes. Every training run goes through it.
+2. `bash tools/measure-ceilings.sh` measures each GPU's GEMM and memory-read ceilings.
+3. `bash tools/run.sh <stage>` runs one stage of the job as a Slurm batch job on both GPU nodes. Every training run goes through it.
 4. `python3 tools/profile-table.py` reads one profiled update into a fixed table and a chart.
 5. `python3 tools/progression.py --markdown` prints the table of all your runs and two charts.
-6. `bash tools/release.sh` releases the nodes.
 
-`bash tools/nccl-protocols.sh` is optional. It runs nccl-tests on the held nodes to compare NCCL's own protocol choice over EFA with `NCCL_PROTO=Simple`.
+`bash tools/nccl-protocols.sh` is optional. It runs nccl-tests on both nodes to compare NCCL's own protocol choice over EFA with `NCCL_PROTO=Simple`.
 
-`bash tools/serve.sh` is optional too. It serves the model with vLLM on every GPU of the held nodes and measures its decode rate per GPU against the memory-read ceiling. It needs the vLLM image that `facilitator/prepare-event.sh --with-serving` imports.
+`bash tools/serve.sh` is optional too. It serves the model with vLLM on every GPU of both nodes and measures its decode rate per GPU against the memory-read ceiling. It needs the vLLM image that `facilitator/prepare-event.sh --with-serving` imports.
 
-All the tools run in a shell on the login node, from this directory. The training runs on both GPU nodes through `srun` steps of the held allocation. The section [Repeat the job on another PCS cluster](#repeat-the-job-on-another-pcs-cluster) describes the provisioning the tools expect.
+All the tools run in a shell on the login node, from this directory. Each tool asks Slurm for both GPU nodes, whole, for as long as it runs (`sbatch` for `run.sh`, `salloc` for the two optional tools, `srun` for the rest), so one tool runs at a time and a second one waits in the queue. The section [Repeat the job on another PCS cluster](#repeat-the-job-on-another-pcs-cluster) describes the provisioning the tools expect.
 
-## The environment and the allocation
+## The environment
 
 Every shell tool first sources the environment file that provisioning writes, `${AIM347_ENV:-/fsx/aim347/participant/aim347.env}`. It sets the partition, the GPU count per node, the image, data and results paths, the NCCL socket interface, the container name and the Grafana URL. A tool exits with status 2 and prints `AIM347: environment file not found: <path>` when the file is missing. The two Python tools read `LLM_RESULTS_DIR` from the shell's environment, so source the file in your shell first (`. /fsx/aim347/participant/aim347.env`); the workshop's login shell already does.
-
-The tools then source `~/.aim347/allocation.env` if it exists. `hold-and-measure.sh` writes that file with the Slurm job ID, node list and CPU count of the held allocation. Because `srun` reads `SLURM_JOB_ID`, every later tool runs its steps inside the same allocation, in this shell or in a new one after a disconnect. If the job named in the file is no longer running, the tools ignore the file, and `run.sh` exits with status 3 and `AIM347: no session allocation. Run: bash tools/hold-and-measure.sh`.
-
-## job.env
-
-`job.env` in this directory holds the three settings that the workshop changes, one line at a time:
-
-| Key | Values | Meaning |
-|---|---|---|
-| `LLM_TRANSPORT` | `socket`, `efa` | NCCL sends collectives over TCP sockets, or over EFA through the AWS Libfabric plugin with `OFI_NCCL_PROTOCOL=RDMA` (`SENDRECV` on `g6e.48xlarge`, where RDMA hangs) and `NCCL_PROTO=Simple` (an `NCCL_PROTO` set in your shell takes its place, see [nccl-protocols.sh](#nccl-protocolssh)) |
-| `ATTENTION` | `eager`, `sdpa` | The Transformers attention implementation |
-| `CHECKPOINT_MODE` | `none`, `sync`, `process` | No saving, synchronous saves, or saves written by a separate process while training continues |
-
-The committed file starts at `socket`, `eager` and `none`. The tools parse the file and never source it. A line with another key, a value outside the table or a repeated key is an error that names its line number. To start over, run `git checkout job.env`. Set `AIM347_JOB_ENV` to use a file elsewhere.
 
 ## check.sh
 
@@ -39,55 +24,54 @@ The committed file starts at `socket`, `eager` and `none`. The tools parse the f
 bash tools/check.sh
 ```
 
-Prints one line per check, `PASS` or `FAIL`, with the observed value and, on a failure, the expected one. The node checks run on both GPU nodes: inside the held allocation if there is one (with `--overlap`, so they also answer while a stage runs), otherwise in a two-minute job of the partition. They read the GPU name and memory from `nvidia-smi`, and count the entries of `/sys/class/infiniband` whose driver is `efa`. On the login node the tool checks that the stage directory is on Lustre with 300 GiB free, that the image's recorded SHA-256 matches the environment file and was checked on both nodes during provisioning, that each dataset's fingerprint matches its manifest and its pinned value, and that the model snapshot matches the config. It queries Prometheus through `https://localhost/prometheus` for the Lustre collector and the EFA counters on both GPU nodes, and Grafana through `https://localhost/grafana/api/health`. The `grafana` line prints the Grafana URL, the user `admin` and the password from `~/.aim347/grafana-admin-password`.
+Prints one line per check, `PASS` or `FAIL`, with the observed value and, on a failure, the expected one. The node checks run on both GPU nodes in a two-minute `srun` job of the partition, which waits up to 120 seconds for the nodes. They read the GPU name and memory from `nvidia-smi`, and count the entries of `/sys/class/infiniband` whose driver is `efa`. On the login node the tool checks that the stage directory is on Lustre with 300 GiB free, that the image's recorded SHA-256 matches the environment file and was checked on both nodes during provisioning, that each dataset's fingerprint matches its manifest and its pinned value, and that the model snapshot matches the config. It queries Prometheus through `https://localhost/prometheus` for the Lustre collector and the EFA counters on both GPU nodes, and Grafana through `https://localhost/grafana/api/health`. The `grafana` line prints the Grafana URL, the user `admin` and the password from `~/.aim347/grafana-admin-password`.
 
 Exit status: 0 when every check passes; 1 when any fails (the last line says how many, and the first `FAIL` line is the one to fix first); 2 when the environment file is missing.
 
-## hold-and-measure.sh
+## measure-ceilings.sh
 
 ```bash
-bash tools/hold-and-measure.sh
+bash tools/measure-ceilings.sh
 ```
 
-Reuses a running job of yours named `aim347-session`, or requests one with `salloc --no-shell` for both nodes of the partition, all their CPUs and GPUs, exclusively, with `--time=UNLIMITED`. `--no-shell` lets the allocation outlive the shell that requested it, and it lasts until `release.sh` ends it. The explicit `--time=UNLIMITED` keeps a partition's `DefaultTime` from setting a limit. If Slurm cannot grant it within 120 seconds, the tool prints the partition's queue and exits with status 3.
+Runs one `srun` step on both nodes in the training image and measures every GPU in parallel. `aim347-gemm 8192 30` times a dense BF16 GEMM with FP32 accumulation, and `aim347-dram 0` times a 1 GiB streaming read (both built by the `Dockerfile` from `lib/gemm.cu` and `lib/dram.cu`). The per-GPU results go to `$LLM_RESULTS_DIR/ceilings/`. `ceilings.json` there holds the median over all GPUs of the best GEMM rate, the median over all GPUs of the median read bandwidth, and their ratio, the ridge point in FLOP per byte. The tool prints the per-GPU values and these three numbers. The step uses the container name from the environment file, so the image stays unpacked for the session's later runs.
 
-It then runs one step on both nodes in the training image and measures every GPU in parallel. `aim347-gemm 8192 30` times a dense BF16 GEMM with FP32 accumulation, and `aim347-dram 0` times a 1 GiB streaming read (both built by the `Dockerfile` from `lib/gemm.cu` and `lib/dram.cu`). The per-GPU results go to `$LLM_RESULTS_DIR/ceilings/`. `ceilings.json` there holds the median over all GPUs of the best GEMM rate, the median over all GPUs of the median read bandwidth, and their ratio, the ridge point in FLOP per byte. The tool prints the per-GPU values and these three numbers. The step uses the container name from the environment file, so the image stays unpacked for the session's later runs.
-
-Exit status: 0 when the allocation is held and the ceilings are written; 2 when the environment file is missing; 3 when the allocation is not granted; 4 when the measurement fails. After a failed measurement the allocation is still held, and running the tool again reuses it and measures again.
+Exit status: 0 when the ceilings are written; 2 when the environment file is missing; otherwise the status of the failed step. Run the tool again to measure again.
 
 ## run.sh
 
 ```bash
-bash tools/run.sh <subcommand>
+bash tools/run.sh <stage> [<stage> ...]
 ```
 
-Each subcommand first checks `job.env`. If a setting differs from what the subcommand needs, it exits with status 2 and prints the `sed` line that changes it, for example `sed -i 's/^LLM_TRANSPORT=socket$/LLM_TRANSPORT=efa/' job.env`.
+`run.sh` submits one batch job (`sbatch`, both nodes, exclusive) that runs the named stages in order, and follows the job's log. The stage name selects the settings:
 
-| Subcommand | Needs (transport / attention / saving) | Stage directory | Config and data | What it runs |
-|---|---|---|---|---|
-| `baseline` | socket / eager / none | `baseline` | `smol-2048`, `tokens-2048-160` | One timed run |
-| `probe` | any / any / none | `probe-<transport>-<attention>` | `smol-1024`, `tokens-1024-160` | One run at half the sequence length |
-| `profile` | any / any / none | `profile-<transport>-<attention>` | `smol-2048`, `tokens-2048-160` | One run with the PyTorch profiler; its time is not compared |
-| `sdpa-socket` | socket / eager / none | `sdpa-socket` | `smol-2048`, `tokens-2048-160` | One run with SDPA attention for this run only; `job.env` is unchanged |
-| `efa` | efa / eager / none | `efa` | `smol-2048`, `tokens-2048-160` | One timed run |
-| `sdpa` | efa / sdpa / none | `sdpa` | `smol-2048`, `tokens-2048-160` | One timed run, with its losses beside those of stage `efa` |
-| `checkpoint` | efa / sdpa / sync or process | `ckpt-sync`, then `ckpt-process` | `smol-2048-40`, `tokens-2048-1280` | Two runs that differ only in the saving mode, each saving after updates 5, 20 and 40 |
-| `restore` | efa / sdpa / any | `restore` | `smol-2048-40`, `tokens-2048-1280` | Restores the update-20 checkpoint of `ckpt-sync`, runs updates 21 to 25 and stops |
-| `interrupt` | efa / sdpa / any | `interrupt` | `smol-2048-40`, `tokens-2048-1280` | A process-mode run stopped after update 30, then resumed from its last completed checkpoint |
-| `try <change>` | efa / sdpa / any | `try-<change>`, then `rerun-<change>` | `smol-2048`, `tokens-2048-160` | Two runs without saving: the configuration of `sdpa` with one change, then the same configuration without it |
-| `attach` | | | | Follows the stage in progress, or prints the result of the last one |
+| Stage | Transport / attention / saving | Config and data | What it runs |
+|---|---|---|---|
+| `baseline` | socket / eager / none | `smol-2048`, `tokens-2048-160` | One timed run |
+| `probe-socket-eager`, `probe-efa-eager` | as named / none | `smol-1024`, `tokens-1024-160` | One run at half the sequence length |
+| `profile-socket-eager`, `profile-efa-eager`, `profile-efa-sdpa` | as named / none | `smol-2048`, `tokens-2048-160` | One run with the PyTorch profiler; its time is not compared |
+| `sdpa-socket` | socket / sdpa / none | `smol-2048`, `tokens-2048-160` | One timed run |
+| `efa` | efa / eager / none | `smol-2048`, `tokens-2048-160` | One timed run |
+| `sdpa` | efa / sdpa / none | `smol-2048`, `tokens-2048-160` | One timed run, with its losses beside those of stage `efa` |
+| `ckpt-sync`, `ckpt-process` | efa / sdpa / sync or process | `smol-2048-40`, `tokens-2048-1280` | One run that saves after updates 5, 20 and 40 |
+| `restore` | efa / sdpa / sync | `smol-2048-40`, `tokens-2048-1280` | Restores the update-20 checkpoint of `ckpt-sync`, runs updates 21 to 25 and stops |
+| `interrupt` | efa / sdpa / process | `smol-2048-40`, `tokens-2048-1280` | A process-mode run stopped after update 30, then resumed from its last completed checkpoint |
+| `try-<change>`, `rerun-<change>` | efa / sdpa / none | `smol-2048`, `tokens-2048-160` | The configuration of `sdpa` with one change, and the same configuration without it |
+
+`NCCL_SOCKET_IFNAME` and the other settings of the environment file reach the job because `sbatch` exports the submitting shell's environment. With transport `efa`, NCCL uses the AWS Libfabric plugin with `OFI_NCCL_PROTOCOL=RDMA` and `NCCL_PROTO=Simple` (an `NCCL_PROTO` set in your shell takes its place, see [nccl-protocols.sh](#nccl-protocolssh)).
 
 `smol-2048` and `smol-1024` run five updates of 32 sequences, with the first update as warmup. `smol-2048-40` runs 40 updates with two warmup updates. The three configs differ only in the sequence length, the update counts, the saves and the description. `restore` needs a finished `ckpt-sync` stage whose update-20 checkpoint completed. `interrupt` runs `13.measure-recovery.py`, which stops the first run without publishing the save in progress, restores the newest checkpoint that has a `COMPLETED.json`, and runs to update 40.
 
-`try` needs a finished `sdpa` stage. Its `<change>` is one of four trainer changes to the configuration of `sdpa`: `microbatch2` runs `--microbatch 2` in place of `--microbatch 1`, so each GPU trains on its two sequences of an update at once; `fused-optimizer` adds `--fused-optimizer`, AdamW with `fused=True`; `forward-prefetch` adds `--forward-prefetch`, which has FSDP2 issue the next decoder block's all-gather earlier in the forward pass; `no-reshard-after-forward` adds `--no-reshard-after-forward`, which keeps each block's gathered parameters from the forward pass for the backward pass. The second run, `rerun-<change>`, repeats `sdpa` unchanged, so that `sdpa` and the rerun give the spread between two runs of the same configuration. After both runs, `try` prints the spread, `|sdpa - rerun-<change>|`, and the change, `try-<change>` minus the mean of `sdpa` and the rerun, each in seconds of the timed updates and in percent of that mean, and a chart of the two. It gives no verdict. It compares nothing when the three runs did not do the same work on the same allocation, when `sdpa` and the rerun differ in their `summary.json` configuration, when the run with the change differs from the rerun in more than the change, or when its `summary.json` does not record the change, and it prints the difference instead. Running `try` again with the same change replaces both stages.
+The `try-<change>` stages compare with a finished `sdpa` stage. `<change>` is one of four trainer changes to the configuration of `sdpa`: `microbatch2` runs `--microbatch 2` in place of `--microbatch 1`, so each GPU trains on its two sequences of an update at once; `fused-optimizer` adds `--fused-optimizer`, AdamW with `fused=True`; `forward-prefetch` adds `--forward-prefetch`, which has FSDP2 issue the next decoder block's all-gather earlier in the forward pass; `no-reshard-after-forward` adds `--no-reshard-after-forward`, which keeps each block's gathered parameters from the forward pass for the backward pass. The second run, `rerun-<change>`, repeats `sdpa` unchanged, so that `sdpa` and the rerun give the spread between two runs of the same configuration. After both runs, `try` prints the spread, `|sdpa - rerun-<change>|`, and the change, `try-<change>` minus the mean of `sdpa` and the rerun, each in seconds of the timed updates and in percent of that mean, and a chart of the two. It gives no verdict. It compares nothing when the three runs did not do the same work on the same allocation, when `sdpa` and the rerun differ in their `summary.json` configuration, when the run with the change differs from the rerun in more than the change, or when its `summary.json` does not record the change, and it prints the difference instead. Running `try` again with the same change replaces both stages.
 
 The trainer arguments are the same for every stage apart from the config, data, attention, saving mode, output and the change of a `try` stage, and they appear in the stage's `run.json`. The launcher is `2.run-llm.sh`, which runs one `torchrun` per node in the training image, with the container name from the environment file.
 
 ### Following a run
 
-`run.sh` starts each stage in a background worker in its own session, then follows it. It prints a header with the settings, the work and the results path, a line every 10 seconds until the first update finishes, and then rank 0's row for each update: the seconds since the previous update and the loss, plus the save, pending-upload and durable-update columns for runs that save. When the stage ends it prints a result block: the timed interval and its target tokens, tokens per second, GPU-seconds per million tokens, MFU against the GPU's dense BF16 peak, the share of your measured GEMM peak (or `n/a` before `hold-and-measure.sh` has run), the largest rank's peak memory, the NCCL network each rank used, and the EFA bytes each node sent and received during the run. An EFA stage also prints the libfabric provider, the plugin's transport protocol, the `NCCL_PROTO` value that NCCL logged on each rank (`Simple on 16 of 16 ranks`), and how many network channel lines send from GPU memory (`/GDRDMA`). Runs that save also print their training goodput in the block, with what it is computed from: the retained tokens (the tokens of the updates in the last durable checkpoint), the interval, which runs from the end of setup (model loading, FSDP wrapping, optimizer, checkpoint manager) to the end of the final flush and the closing synchronization across ranks, the retained progress rate (the retained tokens divided by the interval), the fault-free rate (the tokens per second of the timed updates of stage `sdpa`, which does the same work per update without saves) and the training goodput, the first rate divided by the second, with two decimals. Training goodput has no unit. The interval also holds the data loader's start and the warmup updates, which the fault-free rate leaves out, so even a run without saves stays below 1. The block prints `not computed` and the reason in place of the fault-free rate and the goodput when the run itself is not completed, was profiled, ran numerical verification or is marked not performance-eligible; when stage `sdpa` has no completed run, had a failed check or is not a clean measurement in the same ways; when the two differ in their recorded configuration other than the checkpoint mode, in model revision, precision, allocation label or GPU; or when the work per update differs. A value above 1 is printed as measured, with `above 1: check the reference run`. `restore` prints its losses beside those of `ckpt-sync`, and `interrupt` prints which checkpoints had completed at the stop, how many updates ran twice, and the same goodput lines for the whole command, from just before the first launch to the exit of the resumed launch.
+The batch job writes its output to `$LLM_RESULTS_DIR/logs/<UTC>-<first stage>.log`, and `run.sh` follows that file with `tail` until the job leaves the queue. For each stage the log has a header with the settings, the work and the results path, and then rank 0's row for each update: the seconds since the previous update and the loss, plus the save, pending-upload and durable-update columns for runs that save. When the stage ends it prints a result block: the timed interval and its target tokens, tokens per second, GPU-seconds per million tokens, MFU against the GPU's dense BF16 peak, the share of your measured GEMM peak (or `n/a` before `hold-and-measure.sh` has run), the largest rank's peak memory, the NCCL network each rank used, and the EFA bytes each node sent and received during the run. An EFA stage also prints the libfabric provider, the plugin's transport protocol, the `NCCL_PROTO` value that NCCL logged on each rank (`Simple on 16 of 16 ranks`), and how many network channel lines send from GPU memory (`/GDRDMA`). Runs that save also print their training goodput in the block, with what it is computed from: the retained tokens (the tokens of the updates in the last durable checkpoint), the interval, which runs from the end of setup (model loading, FSDP wrapping, optimizer, checkpoint manager) to the end of the final flush and the closing synchronization across ranks, the retained progress rate (the retained tokens divided by the interval), the fault-free rate (the tokens per second of the timed updates of stage `sdpa`, which does the same work per update without saves) and the training goodput, the first rate divided by the second, with two decimals. Training goodput has no unit. The interval also holds the data loader's start and the warmup updates, which the fault-free rate leaves out, so even a run without saves stays below 1. The block prints `not computed` and the reason in place of the fault-free rate and the goodput when the run itself is not completed, was profiled, ran numerical verification or is marked not performance-eligible; when stage `sdpa` has no completed run, had a failed check or is not a clean measurement in the same ways; when the two differ in their recorded configuration other than the checkpoint mode, in model revision, precision, allocation label or GPU; or when the work per update differs. A value above 1 is printed as measured, with `above 1: check the reference run`. `restore` prints its losses beside those of `ckpt-sync`, and `interrupt` prints which checkpoints had completed at the stop, how many updates ran twice, and the same goodput lines for the whole command, from just before the first launch to the exit of the resumed launch.
 
-Ctrl-C, a closed browser tab or a dropped connection stops only the following. `bash tools/run.sh attach` follows the stage again from any shell. While a stage runs, any other subcommand prints `Stage <name> is still running; following it` and follows it. While `serve.sh` holds the GPUs, `run.sh` starts no stage and exits with status 2.
+Ctrl-C, a closed browser tab or a dropped connection stops only the following. The batch job keeps running; `squeue --me` lists it, `tail -f <log>` follows it again from any shell (`run.sh` prints the path first), and `scancel <job ID>` stops it.
 
 MFU (model FLOPs utilization, PaLM section 4.1 and appendix B) is tokens per second times 6N + 12·L·d·T FLOP per token, divided by 16 times the dense BF16 Tensor Core peak of one GPU. N is 1,711,376,384 parameters, the tied embedding counted once as PaLM and torchtitan count it, L is 24 layers, d is 2,048 and T is the sequence length. The attention term 12·L·d·T follows PaLM's full, non-causal count; Megatron-LM halves it for the causal mask, which gives a 5.3 % lower FLOP count at 2,048 positions. The tools take the peak from the GPU name in `summary.json` and the table `DENSE_BF16_PEAKS` in `lib/workshop.py`, which gives the source of each value:
 
@@ -121,14 +105,14 @@ The Session Manager terminal cannot open image files, so the tools draw their ch
 
 The EFA counters are `tx_bytes`, `rx_bytes`, `rdma_read_bytes`, `rdma_write_bytes` and `rdma_write_recv_bytes` under each EFA device's `ports/1/hw_counters`, read on both nodes by one `srun` step before the run and one after it. The bytes sent and received in the result block are the changes in `tx_bytes` and `rx_bytes`.
 
-Exit status: 0 on success, and also after Ctrl-C (the stage keeps running); 2 for usage, an invalid `job.env`, a setting the subcommand does not accept, or a missing earlier stage; 3 when no session allocation is held; 4 when the run failed (the tool prints the last 40 lines of the launch log, and for `interrupt` also of the segment log written last); 5 when the run succeeded but a check failed (the tool names the check).
+Exit status of `run.sh`: 0 when the following ends; 2 for usage or an unknown stage, before anything is submitted. The result of each stage is in the log and in `exit_status` of its `run.json`: 0, 4 when the run failed (the log has the last 40 lines of the launch log), or 5 when the run finished and a check failed.
 
 ### Stage directory
 
 ```text
 $LLM_RESULTS_DIR/<stage>/
-  run.json            stage, subcommand, job.env values, settings used, launch command, config, data,
-                      allocation ID, start and end times, launcher exit, exit status and checks
+  run.json            stage, settings used, launch command, config, data,
+                      batch job ID, start and end times, launcher exit, exit status and checks
   launch.log          output of the launch, including the NCCL INFO lines (interrupt: the controller's output)
   efa-before.json     {node: {device: {counter: value}}} before the run; a node that could not be read maps to {}
   efa-after.json      the same after the run
@@ -139,10 +123,7 @@ $LLM_RESULTS_DIR/<stage>/
                       interrupted.log and resumed.log, events.jsonl, campaign.json
 $LLM_RESULTS_DIR/attempts/<stage>-<UTC>/   an earlier attempt of the stage, moved here before a rerun
 $LLM_RESULTS_DIR/ceilings/                 the GEMM and memory-read results and ceilings.json
-~/.aim347/allocation.env                   the held allocation
-~/.aim347/running                          the stage in progress and its worker's process ID
-~/.aim347/serving                          serve.sh only: its process ID while its servers run
-~/.aim347/worker.log                       the background worker's own output
+$LLM_RESULTS_DIR/logs/                     the log of each batch job of run.sh
 ```
 
 ## profile-table.py
@@ -174,7 +155,7 @@ Exit status: 0; 2 when the stage or a trace is missing; 3 when the trace has no 
 python3 tools/progression.py [--markdown]
 ```
 
-Prints the ceilings, then one row per stage, in the order `baseline`, `probe-socket-eager`, `sdpa-socket`, `efa`, `probe-efa-eager`, `sdpa`, `ckpt-sync`, `ckpt-process`, `interrupt`, then `try-<change>` and `rerun-<change>` for each change you ran with `try`, followed by any other stage. It skips `profile-*`, `restore` and `attempts/`. The columns are the settings, the work (updates times positions), the timed seconds, tokens per second, GPU-seconds per million tokens, MFU against the GPU's dense BF16 peak, the share of your measured GEMM peak, peak memory, the speed-up against `baseline` and against the previous main-path stage, and the training goodput of the saving and interrupt stages, with two decimals. The retained progress of a saving stage comes from its `summary.json`, over the interval from the end of setup (model loading, FSDP wrapping, optimizer, checkpoint manager) to the end of the final flush and the closing synchronization across ranks. The retained progress of `interrupt` comes from `campaign.json`, over the whole command from just before the first launch to the exit of the resumed launch, so it also includes both launches and both model loads. Its goodput cell refers to a note that gives both intervals. Each goodput divides the retained progress rate by the fault-free rate of stage `sdpa`. When the result block would print `not computed`, the cell refers to a note that gives the reason; a value above 1 keeps its value and refers to a note to check the reference run. Below the notes, two lines state the denominators of MFU and of the share of your GEMM peak. A speed-up is shown only for a pair of runs that `paired_training_report` in `lib/llm_metrics.py` accepts: the same work on the same allocation, completed and unprofiled. Otherwise the cell refers to a note below the table that names the difference. The main path is `baseline`, `efa`, `sdpa`. `sdpa-socket` is compared with `baseline`, and the stages of `try` with `sdpa`. Because each step's speed-up divides the previous stage's seconds by this stage's seconds, the product of the steps along the main path equals the last stage's speed-up against `baseline`.
+Prints the ceilings, then one row per stage, in the order `baseline`, `probe-socket-eager`, `sdpa-socket`, `efa`, `probe-efa-eager`, `sdpa`, `ckpt-sync`, `ckpt-process`, `interrupt`, then `try-<change>` and `rerun-<change>` for each change you ran, followed by any other stage. It skips `profile-*`, `restore` and `attempts/`. The columns are the settings, the work (updates times positions), the timed seconds, tokens per second, GPU-seconds per million tokens, MFU against the GPU's dense BF16 peak, the share of your measured GEMM peak, peak memory, the speed-up against `baseline` and against the previous main-path stage, and the training goodput of the saving and interrupt stages, with two decimals. The retained progress of a saving stage comes from its `summary.json`, over the interval from the end of setup (model loading, FSDP wrapping, optimizer, checkpoint manager) to the end of the final flush and the closing synchronization across ranks. The retained progress of `interrupt` comes from `campaign.json`, over the whole command from just before the first launch to the exit of the resumed launch, so it also includes both launches and both model loads. Its goodput cell refers to a note that gives both intervals. Each goodput divides the retained progress rate by the fault-free rate of stage `sdpa`. When the result block would print `not computed`, the cell refers to a note that gives the reason; a value above 1 keeps its value and refers to a note to check the reference run. Below the notes, two lines state the denominators of MFU and of the share of your GEMM peak. A speed-up is shown only for a pair of runs that `paired_training_report` in `lib/llm_metrics.py` accepts: the same work on the same allocation, completed and unprofiled. Otherwise the cell refers to a note below the table that names the difference. The main path is `baseline`, `efa`, `sdpa`. `sdpa-socket` is compared with `baseline`, and the stages of `try` with `sdpa`. Because each step's speed-up divides the previous stage's seconds by this stage's seconds, the product of the steps along the main path equals the last stage's speed-up against `baseline`.
 
 Below the table and its notes, the tool prints two charts: the speed-up over baseline of `baseline`, `efa` and `sdpa`, and the training goodput of `ckpt-sync` and `ckpt-process`. They are the charts that `run.sh` prints under the result blocks ([Charts under the result block](#charts-under-the-result-block)).
 
@@ -186,17 +167,17 @@ Below the table and its notes, the tool prints two charts: the speed-up over bas
 bash tools/nccl-protocols.sh
 ```
 
-Runs nccl-tests over EFA on the held nodes, once with NCCL's own protocol choice and once with `NCCL_PROTO=Simple`. The workshop does not need it. `2.run-llm.sh` sets `NCCL_PROTO=Simple` for EFA stages because on two `g7.48xlarge` under `OFI_NCCL_PROTOCOL=RDMA`, NCCL chooses its LL protocol for all-reduce from 64 KiB to 8 MiB, and from 1 MiB that range runs many times slower than with Simple ([VALIDATION.md](../VALIDATION.md#nccl-protocol-on-the-efa-path-2026-11-03)).
+Runs nccl-tests over EFA on both nodes, once with NCCL's own protocol choice and once with `NCCL_PROTO=Simple`. The workshop does not need it. `2.run-llm.sh` sets `NCCL_PROTO=Simple` for EFA stages because on two `g7.48xlarge` under `OFI_NCCL_PROTOCOL=RDMA`, NCCL chooses its LL protocol for all-reduce from 64 KiB to 8 MiB, and from 1 MiB that range runs many times slower than with Simple ([VALIDATION.md](../VALIDATION.md#nccl-protocol-on-the-efa-path-2026-11-03)).
 
 `2.run-llm.sh` keeps an `NCCL_PROTO` that is already set in your shell, so you can run a training stage the same way. `NCCL_PROTO= bash tools/run.sh efa` (an empty value) leaves `NCCL_PROTO` unset, so that NCCL chooses its protocol as in the first run of this tool, and `NCCL_PROTO=LL bash tools/run.sh efa` requests LL. The `NCCL_PROTO` line of the result block shows what NCCL logged, and `configuration.nccl_protocol` in `summary.json` records the value (`auto` when unset). Such a run replaces the stage like any rerun: the earlier `efa` moves to `attempts/`, and `progression.py` and the charts use the new run.
 
 `2.run-llm.sh` also keeps `NCCL_DEBUG` and `NCCL_DEBUG_SUBSYS` from your shell, and sets `NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET,ENV` when they are unset or empty (the result block and the NCCL network check read those lines). `NCCL_DEBUG=info bash tools/run.sh efa` passes the value as typed; NCCL compares the level case-insensitively. `NCCL_DEBUG` must be one of NCCL's levels (`VERSION`, `WARN`, `INFO`, `ABORT`, `TRACE`, any case), otherwise the launcher exits with status 2. The NCCL lines go to the stage's `launch.log` in `$LLM_RESULTS_DIR/<stage>/` (interrupt: `campaign/interrupted.log` and `campaign/resumed.log`). The post-run NCCL network check and the result block read the `Using network` lines, which NCCL logs at level `INFO` under `INIT`; the `NCCL_PROTO` line comes from `ENV`. A level below `INFO` (`VERSION`, `WARN`) or a subsystem mask that disables `INIT` leaves the network check without its required lines. Disabling only `ENV` suppresses NCCL's protocol-confirmation messages, so the result block shows `NCCL_PROTO` as `not set on any rank`. In this case, that text means the log evidence is missing, not that `NCCL_PROTO` was unset; the `INIT` network evidence remains. `NCCL_DEBUG_SUBSYS=ALL` enables both; `NCCL_DEBUG_SUBSYS=^ENV` keeps `INIT` enabled.
 
-The tool needs the session allocation and refuses while a stage runs or while `serve.sh` holds the GPUs. Both runs use `all_reduce_perf` from 1 MiB to 64 MiB on all 16 GPUs, one MPI rank per GPU, in the training image, with the EFA settings of `2.run-llm.sh`. The first leaves `NCCL_PROTO` unset, so that NCCL chooses the protocol, and the second sets `NCCL_PROTO=Simple`. With `NCCL_DEBUG_SUBSYS=INIT,NET,ENV,TUNING`, rank 0 logs the algorithm and protocol of every collective. NCCL writes its log to one file per process, `nccl-<host>-<pid>.log`, so that the table on standard output stays readable. The rank script is `lib/nccl-protocols-rank.sh`.
+Both runs use `all_reduce_perf` from 1 MiB to 64 MiB on all 16 GPUs, one MPI rank per GPU, in the training image, with the EFA settings of `2.run-llm.sh`. The first leaves `NCCL_PROTO` unset, so that NCCL chooses the protocol, and the second sets `NCCL_PROTO=Simple`. With `NCCL_DEBUG_SUBSYS=INIT,NET,ENV,TUNING`, rank 0 logs the algorithm and protocol of every collective. NCCL writes its log to one file per process, `nccl-<host>-<pid>.log`, so that the table on standard output stays readable. The rank script is `lib/nccl-protocols-rank.sh`.
 
 The tool prints one row per size with the out-of-place time and bus bandwidth of each run and the algorithm and protocol that rank 0 logged, then the `NCCL_PROTO` value each run's log shows and the two log directories, and then a chart of the bus bandwidth of both runs at each size. The results are in `$LLM_RESULTS_DIR/nccl-protocols/<UTC>/nccl-choice/` and `simple/`, each with `all_reduce_perf.txt` and the NCCL logs. `progression.py` does not list them.
 
-Exit status: 0; 2 for usage or while a stage runs; 3 when no session allocation is held; 4 when a run fails (the tool prints the last 40 lines of its output); 5 when nccl-tests reports wrong values.
+Exit status: 0; 2 for usage; 4 when a run fails (the tool prints the last 40 lines of its output); 5 when nccl-tests reports wrong values.
 
 ## serve.sh
 
@@ -204,7 +185,7 @@ Exit status: 0; 2 for usage or while a stage runs; 3 when no session allocation 
 bash tools/serve.sh
 ```
 
-Serves SmolLM2-1.7B at the pinned revision with vLLM 0.20.2 on the held nodes and measures how fast it decodes. Decode is the part of serving that generates a request's output, one token per step. The workshop does not need it. The tool needs the session allocation, refuses while a stage runs or another `serve.sh` serves, and needs the image `images/vllm-v0.20.2.sqsh` in the stage directory (or the path in `VLLM_IMAGE`), checked on both nodes, which `facilitator/prepare-event.sh --with-serving` imports.
+Serves SmolLM2-1.7B at the pinned revision with vLLM 0.20.2 on both nodes and measures how fast it decodes. Decode is the part of serving that generates a request's output, one token per step. The workshop does not need it. The tool needs the image `images/vllm-v0.20.2.sqsh` in the stage directory (or the path in `VLLM_IMAGE`), checked on both nodes, which `facilitator/prepare-event.sh --with-serving` imports.
 
 It starts `8.serve-llm.sh --tensor-parallel-size 1 --config configs/smol-2048.json` as one `srun` step: one server per GPU, 16 in all, each with the whole model snapshot that provisioning downloaded to `data/model`. Server n of a node listens on port 8100 + n. Every 15 seconds it prints how many servers answer `/health`, and it gives up after 1,200 seconds. When all answer, `lib/serve_llm.py --collect-manifest` records each server's command and GPU, and the tool sends one warm-up request to each server. It then measures four levels, with 1, 4, 16 and 64 requests per GPU running at the same time. At each level every server gets that many client slots, and each slot sends two requests in turn. Each request is a completion of a fixed prompt that generates exactly 256 tokens (`ignore_eos`).
 
@@ -219,15 +200,7 @@ The step time comes from each server's own counters, read before and after a lev
 
 Before the rows it prints the time to read the weights at the ceiling and the decode rate of one request per GPU at a step of that time, the ceiling ÷ the weight bytes. Then it stops the servers by sending SIGTERM to the step with `scancel --signal=TERM`, so that `lib/serve_llm.py` stops its vLLM processes, and prints a chart of the decode rate at each level. Ctrl-C, SIGTERM and a closed terminal (SIGHUP) also stop the servers. While they run, the tool keeps `~/.aim347/serving`, and `run.sh` and `nccl-protocols.sh` refuse to start. Everything goes to `$LLM_RESULTS_DIR/serving-<UTC>/`: `launch.log` (the step's output), `node-<n>/replica-<n>.log` (each server's log), `manifest.json`, `endpoints.txt` and `serving.json` (every level with each server's counter differences). The directory has no `run.json`, so `progression.py` does not list it.
 
-Exit status: 0; 2 for usage, while a stage runs or without the image; 3 when no session allocation is held; 4 when the servers do not all answer or a request fails (the tool prints the last 40 lines of `launch.log`); 5 when the counters do not match the requests; 130 when interrupted.
-
-## release.sh
-
-```bash
-bash tools/release.sh
-```
-
-Cancels the session allocation, waits up to 60 seconds until `squeue` no longer lists it, removes `~/.aim347/allocation.env` and `~/.aim347/running`, and prints `squeue --me`. Exit status: 0; 1 when the job is still listed after 60 seconds.
+Exit status: 0; 2 for usage or without the image; 4 when the servers do not all answer or a request fails (the tool prints the last 40 lines of `launch.log`); 5 when the counters do not match the requests; 130 when interrupted.
 
 ## Repeat the job on another PCS cluster
 

@@ -54,31 +54,12 @@ EFA_DEVICES = {'g7.48xlarge': 2, 'g6e.48xlarge': 2, 'g7e.48xlarge': 2}
 OFI_PROTOCOLS = {'g6e.48xlarge': 'SENDRECV'}
 FSX_FREE_BYTES = 300 * 2**30
 
-JOB_SETTINGS = {
-    'LLM_TRANSPORT': ('socket', 'efa'),
-    'ATTENTION': ('eager', 'sdpa'),
-    'CHECKPOINT_MODE': ('none', 'sync', 'process'),
-}
 EFA_COUNTERS = ('tx_bytes', 'rx_bytes', 'rdma_read_bytes', 'rdma_write_bytes', 'rdma_write_recv_bytes')
 NETWORK = {'socket': 'Socket', 'efa': 'AWS Libfabric'}
 RESTORE_FROM, RESTORE_STOP, INTERRUPT_AFTER = 20, 25, 30
 
-# Subcommand: required job.env values (None accepts any), kind and config.
-SUBCOMMANDS = {
-    'baseline': dict(requires=('socket', 'eager', 'none'), kind='timed', config='configs/smol-2048.json'),
-    'probe': dict(requires=(None, None, 'none'), kind='timed', config='configs/smol-1024.json'),
-    'profile': dict(requires=(None, None, 'none'), kind='profile', config='configs/smol-2048.json'),
-    'sdpa-socket': dict(requires=('socket', 'eager', 'none'), kind='timed', config='configs/smol-2048.json'),
-    'efa': dict(requires=('efa', 'eager', 'none'), kind='timed', config='configs/smol-2048.json'),
-    'sdpa': dict(requires=('efa', 'sdpa', 'none'), kind='timed', config='configs/smol-2048.json'),
-    'checkpoint': dict(requires=('efa', 'sdpa', ('sync', 'process')), kind='timed',
-                       config='configs/smol-2048-40.json'),
-    'restore': dict(requires=('efa', 'sdpa', None), kind='restore', config='configs/smol-2048-40.json'),
-    'interrupt': dict(requires=('efa', 'sdpa', None), kind='interrupt', config='configs/smol-2048-40.json'),
-    'try': dict(requires=('efa', 'sdpa', None), kind='timed', config='configs/smol-2048.json'),
-}
-# Optional A: `run.sh try <change>` runs the final configuration with one trainer change,
-# then the same configuration without it. `argument` is what the change does to the trainer
+# Optional A: stage try-<change> runs the final configuration with one trainer change,
+# and stage rerun-<change> the same configuration without it. `argument` is what the change does to the trainer
 # arguments of stage sdpa; `key` and `value` are the summary.json configuration entry that
 # shows the change took effect, and `default` the entry without it. `also` lists entries the
 # change moves with it (two sequences at once leave one accumulation step per update).
@@ -91,6 +72,24 @@ TRY_CHANGES = {
     'no-reshard-after-forward': dict(argument='--no-reshard-after-forward', key='reshard_after_forward',
                                      value=False, default=True, also=()),
 }
+# Stage: transport, attention, saving, kind and config. tools/run.sh takes these names.
+STAGES = {
+    'baseline': ('socket', 'eager', 'none', 'timed', 'configs/smol-2048.json'),
+    'probe-socket-eager': ('socket', 'eager', 'none', 'timed', 'configs/smol-1024.json'),
+    'profile-socket-eager': ('socket', 'eager', 'none', 'profile', 'configs/smol-2048.json'),
+    'sdpa-socket': ('socket', 'sdpa', 'none', 'timed', 'configs/smol-2048.json'),
+    'efa': ('efa', 'eager', 'none', 'timed', 'configs/smol-2048.json'),
+    'probe-efa-eager': ('efa', 'eager', 'none', 'timed', 'configs/smol-1024.json'),
+    'profile-efa-eager': ('efa', 'eager', 'none', 'profile', 'configs/smol-2048.json'),
+    'sdpa': ('efa', 'sdpa', 'none', 'timed', 'configs/smol-2048.json'),
+    'profile-efa-sdpa': ('efa', 'sdpa', 'none', 'profile', 'configs/smol-2048.json'),
+    'ckpt-sync': ('efa', 'sdpa', 'sync', 'timed', 'configs/smol-2048-40.json'),
+    'ckpt-process': ('efa', 'sdpa', 'process', 'timed', 'configs/smol-2048-40.json'),
+    'restore': ('efa', 'sdpa', 'sync', 'restore', 'configs/smol-2048-40.json'),
+    'interrupt': ('efa', 'sdpa', 'process', 'interrupt', 'configs/smol-2048-40.json'),
+}
+for _change in TRY_CHANGES:
+    STAGES[f'try-{_change}'] = STAGES[f'rerun-{_change}'] = STAGES['sdpa']
 MAIN_PATH = ('baseline', 'efa', 'sdpa')
 PROGRESSION_ORDER = ('baseline', 'probe-socket-eager', 'sdpa-socket', 'efa', 'probe-efa-eager',
                      'sdpa', 'ckpt-sync', 'ckpt-process', 'interrupt')
@@ -98,44 +97,7 @@ PROFILE_ORDER = ('profile-socket-eager', 'profile-efa-eager', 'profile-efa-sdpa'
 
 
 class UsageError(ValueError):
-    """Exit 2: usage, job.env, or the state a subcommand requires."""
-
-
-# ---------------------------------------------------------------- job.env
-
-def parse_job_env(text, name='job.env'):
-    """Parse, never source: three known keys, each once, with allowed values."""
-    values = {}
-    for number, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith('#'):
-            continue
-        key, separator, value = line.partition('=')
-        if not separator or key not in JOB_SETTINGS:
-            raise UsageError(f'{name} line {number}: {raw!r} is not one of '
-                             + ', '.join(f'{k}=...' for k in JOB_SETTINGS))
-        if key in values:
-            raise UsageError(f'{name} line {number}: {key} is set a second time')
-        if value not in JOB_SETTINGS[key]:
-            raise UsageError(f'{name} line {number}: {key} must be one of '
-                             + ', '.join(JOB_SETTINGS[key]) + f' (it says {value!r})')
-        values[key] = value
-    missing = [key for key in JOB_SETTINGS if key not in values]
-    if missing:
-        raise UsageError(f'{name}: missing ' + ', '.join(missing) + '. Start over with: git checkout job.env')
-    return values
-
-
-def job_env_path():
-    return Path(os.environ.get('AIM347_JOB_ENV') or Path(os.environ.get('AIM347_COMPANION', LAB)) / 'job.env')
-
-
-def read_job_env(path=None):
-    path = Path(path or job_env_path())
-    try:
-        return parse_job_env(path.read_text(), path.name)
-    except OSError as error:
-        raise UsageError(f'cannot read {path}: {error}') from error
+    """Exit 2: usage, or a setting the tool needs."""
 
 
 # ---------------------------------------------------------------- stage plans
@@ -151,69 +113,18 @@ def dataset_for(config):
     raise KeyError(config)
 
 
-def requirement_errors(subcommand, job):
-    errors = []
-    for key, allowed in zip(JOB_SETTINGS, SUBCOMMANDS[subcommand]['requires']):
-        if allowed is None:
-            continue
-        allowed = (allowed,) if isinstance(allowed, str) else allowed
-        if job[key] not in allowed:
-            wanted = allowed[0]
-            errors.append(f'{subcommand} expects {key}={" or ".join(allowed)} in job.env '
-                          f'(it says {job[key]}). Change it with: '
-                          f"sed -i 's/^{key}={job[key]}$/{key}={wanted}/' job.env")
-    return errors
-
-
-def subcommand_list():
-    return ', '.join([name if name != 'try' else 'try <change>' for name in SUBCOMMANDS] + ['attach'])
-
-
-def change_error(subcommand, change):
-    """The usage error of a change argument, or None when it fits the subcommand."""
-    if subcommand == 'try' and change not in TRY_CHANGES:
-        return ('try needs one change: bash tools/run.sh try <change>, where <change> is one of '
-                + ', '.join(TRY_CHANGES) + (f' (not {change!r})' if change else ''))
-    if subcommand != 'try' and change is not None:
-        return f'{subcommand} takes no argument (it was given {change!r})'
-    return None
-
-
-def plan(subcommand, job, lab=LAB, change=None):
-    """The stages one subcommand runs, as data. Raises UsageError on a wrong job.env."""
-    if subcommand not in SUBCOMMANDS:
-        raise UsageError(f'unknown subcommand {subcommand!r}; choose one of {subcommand_list()}')
-    if change_error(subcommand, change):
-        raise UsageError(change_error(subcommand, change))
-    errors = requirement_errors(subcommand, job)
-    if errors:
-        raise UsageError('\n'.join(errors))
-    spec = SUBCOMMANDS[subcommand]
-    transport, attention, saving = job['LLM_TRANSPORT'], job['ATTENTION'], job['CHECKPOINT_MODE']
-    if subcommand == 'probe':
-        runs = [(f'probe-{transport}-{attention}', transport, attention, 'none')]
-    elif subcommand == 'profile':
-        runs = [(f'profile-{transport}-{attention}', transport, attention, 'none')]
-    elif subcommand == 'sdpa-socket':
-        runs = [('sdpa-socket', 'socket', 'sdpa', 'none')]
-    elif subcommand == 'checkpoint':
-        runs = [('ckpt-sync', transport, attention, 'sync'), ('ckpt-process', transport, attention, 'process')]
-    elif subcommand == 'restore':
-        runs = [('restore', transport, attention, 'sync')]
-    elif subcommand == 'interrupt':
-        runs = [('interrupt', transport, attention, 'process')]
-    elif subcommand == 'try':
-        # Both without saving, whatever job.env says after Module 6, as stage sdpa ran.
-        runs = [(f'try-{change}', transport, attention, 'none'), (f'rerun-{change}', transport, attention, 'none')]
-    else:
-        runs = [(subcommand, transport, attention, saving)]
-    values = config_values(spec['config'], lab)
-    return [dict(name=name, subcommand=subcommand, kind=spec['kind'], transport=t, attention=a, saving=s,
-                 config=spec['config'], data=dataset_for(spec['config']), sequence_length=values['sequence_length'],
-                 updates=values['updates'], warmup_updates=values['warmup_updates'],
-                 global_batch=values['global_batch_samples'], checkpoint_updates=values['checkpoint_updates'],
-                 job_env=dict(job), change=change, with_change=name.startswith('try-'))
-            for name, t, a, s in runs]
+def stage_plan(name, lab=LAB):
+    """One stage of the STAGES table, as data. Raises UsageError on an unknown name."""
+    if name not in STAGES:
+        raise UsageError(f'unknown stage {name!r}; stages: ' + ', '.join(STAGES))
+    transport, attention, saving, kind, config = STAGES[name]
+    prefix, _, rest = name.partition('-')
+    values = config_values(config, lab)
+    return dict(name=name, kind=kind, transport=transport, attention=attention, saving=saving, config=config,
+                data=dataset_for(config), sequence_length=values['sequence_length'], updates=values['updates'],
+                warmup_updates=values['warmup_updates'], global_batch=values['global_batch_samples'],
+                checkpoint_updates=values['checkpoint_updates'],
+                change=rest if prefix in ('try', 'rerun') else None, with_change=prefix == 'try')
 
 
 def trainer_arguments(stage, label, *, output=True):
@@ -313,7 +224,7 @@ def mfu(tokens_per_second, sequence_length, gpu, gpus):
 
 
 def gemm_share(tokens_per_second, sequence_length, gemm_tflops_per_gpu, gpus):
-    """The model's FLOP per second over gpus x your GEMM peak (measured with hold-and-measure.sh). Not MFU."""
+    """The model's FLOP per second over gpus x your GEMM peak (measured with measure-ceilings.sh). Not MFU."""
     return flop_share(tokens_per_second, sequence_length, gemm_tflops_per_gpu, gpus)
 
 
@@ -334,7 +245,7 @@ def mfu_text(summary, sequence_length, world):
 def gemm_share_text(summary, sequence_length, ceilings, world):
     """The value of the line that compares the model's FLOP rate with your measured GEMM peak."""
     if not ceilings:
-        return 'n/a (run bash tools/hold-and-measure.sh)'
+        return 'n/a (run bash tools/measure-ceilings.sh)'
     rate = ceilings['gemm_tflops_per_gpu']
     value = gemm_share(summary['training_throughput_tokens_per_second'], sequence_length, rate, world)
     return f'{100 * value:.1f} %  (your GEMM peak {rate:.1f} TFLOP/s per GPU)'
@@ -400,7 +311,7 @@ def ceilings_lines(ceilings):
 
 def ceilings_summary(ceilings):
     if not ceilings:
-        return 'GEMM peak n/a (run bash tools/hold-and-measure.sh)'
+        return 'GEMM peak n/a (run bash tools/measure-ceilings.sh)'
     return (f"GEMM peak {ceilings['gemm_tflops_per_gpu']:.1f} TFLOP/s per GPU, memory read "
             f"{ceilings['memory_read_bytes_per_second_per_gpu'] / 1e9:.0f} GB/s per GPU, "
             f"ridge {ceilings['ridge_flop_per_byte']:.0f} FLOP per byte")
@@ -726,12 +637,9 @@ def change_pair(stage, summary):
                                                  for key in (change['key'],) + change['also']))
 
 
-def header_lines(stage, allocation_id, stage_dir):
+def header_lines(stage, job_id, stage_dir):
     used = dict(LLM_TRANSPORT=stage['transport'], ATTENTION=stage['attention'], CHECKPOINT_MODE=stage['saving'])
     lines = [f"[aim347] {stage['name']}: " + ' '.join(f'{k}={v}' for k, v in used.items())]
-    changed = [f'{key}={value}' for key, value in used.items() if stage['job_env'].get(key) != value]
-    if changed:
-        lines.append('[aim347] this run alone uses ' + ' '.join(changed) + '; job.env is unchanged')
     lines += change_lines(stage)
     work = (f"{stage['updates']} updates of {stage['global_batch']} sequences x "
             f"{stage['sequence_length']:,} positions")
@@ -750,7 +658,7 @@ def header_lines(stage, allocation_id, stage_dir):
             lines.append(f'[aim347] {work}; this run is profiled, so its time is not compared')
         else:
             lines.append(f'[aim347] {work}; {timed} ({timed_targets(stage):,} targets)')
-    lines.append(f'[aim347] allocation {allocation_id}, results {stage_dir}')
+    lines.append(f'[aim347] batch job {job_id}, results {stage_dir}')
     return lines
 
 
@@ -1020,7 +928,7 @@ def failure_lines(stage, stage_dir, reason):
 
 
 def result_lines(stage, stage_dir, run, results, world):
-    """What run.sh prints when a stage has finished, by exit status."""
+    """What the batch job prints when a stage has finished, by exit status."""
     stage_dir = Path(stage_dir)
     code = run.get('exit_status')
     if code == 4:
@@ -1048,8 +956,6 @@ def result_lines(stage, stage_dir, run, results, world):
             lines.append(f"check failed: {check['name']}: {check['detail']}")
     if code == 5:
         lines.append('The run finished, but a check failed. Fix it before reading the result.')
-    if stage['subcommand'] == 'sdpa-socket':
-        lines.append('job.env is unchanged')
     return lines
 
 
@@ -1114,7 +1020,7 @@ def cumulative_chart_lines(results):
 
 
 def update_time_names(stage):
-    if stage['subcommand'] == 'probe':
+    if stage['name'].startswith('probe-'):
         return [FULL_LENGTH[(stage['transport'], stage['attention'])], stage['name']]
     if stage['name'] in UPDATE_COMPARED_WITH:
         return [UPDATE_COMPARED_WITH[stage['name']], stage['name']]
@@ -1141,7 +1047,7 @@ def update_time_chart_lines(results, names, ceilings, world):
                               f'{charts.FILLS[3]} the rest {seconds - arithmetic:.2f} s')
         else:
             row.update(segments=[(seconds, charts.FILLS[3])],
-                       detail='arithmetic n/a (run bash tools/hold-and-measure.sh)')
+                       detail='arithmetic n/a (run bash tools/measure-ceilings.sh)')
         rows.append(row)
     # 0.1 s per cell while the bars fit, as in the profile chart, so that a bar keeps its length
     # from one module to the next.
@@ -1277,35 +1183,6 @@ def protocol_chart_lines(runs):
 
 
 # ---------------------------------------------------------------- allocation
-
-GRANTED = re.compile(r'Granted job allocation (\d+)')
-
-
-def parse_granted(text):
-    match = GRANTED.search(text)
-    return int(match.group(1)) if match else None
-
-
-def parse_scontrol_record(text):
-    """Fields of one `scontrol show -o` record (values without spaces)."""
-    return dict(token.split('=', 1) for token in text.split() if '=' in token)
-
-
-def write_allocation(path, job_id, nodelist, cpus_per_node, nodes=2):
-    values = [('SLURM_JOB_ID', job_id), ('SLURM_JOB_NUM_NODES', nodes), ('SLURM_JOB_NODELIST', nodelist),
-              ('SLURM_JOB_CPUS_PER_NODE', f'{cpus_per_node}(x{nodes})'), ('AIM347_ALLOCATION_ID', job_id)]
-    write_atomic(path, ''.join(f'export {key}={shlex.quote(str(value))}\n' for key, value in values))
-
-
-def read_allocation(path):
-    values = {}
-    for line in Path(path).read_text().splitlines():
-        words = shlex.split(line)
-        if len(words) == 2 and words[0] == 'export' and '=' in words[1]:
-            key, value = words[1].split('=', 1)
-            values[key] = value
-    return values
-
 
 def write_atomic(path, text, mode=0o644):
     path = Path(path)
@@ -1510,7 +1387,7 @@ def check_lines(env, sinfo_text, node_reports, fetch=http_text, lab=LAB):
     return lines, failures
 
 
-# ---------------------------------------------------------------- run.sh
+# ---------------------------------------------------------------- the batch job of run.sh
 
 def results_dir():
     value = os.environ.get('LLM_RESULTS_DIR')
@@ -1527,128 +1404,6 @@ def utc_stamp():
     return time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
 
 
-def pid_alive(pid):
-    try:
-        os.kill(pid, 0)
-    except (OSError, TypeError):
-        return False
-    # The foreground run.sh never waits for its worker, so a finished worker
-    # stays a zombie of it until run.sh exits.
-    try:
-        return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
-    except (OSError, IndexError):
-        return True
-
-
-def read_serving(state=None):
-    """The marker that tools/serve.sh keeps while its servers hold the GPUs, if its process is alive."""
-    serving = read_json(Path(state or STATE) / 'serving')
-    return serving if serving and pid_alive(serving.get('pid')) else None
-
-
-SERVING_BUSY = ('AIM347: the vLLM servers of tools/serve.sh hold the GPUs. Run this after serve.sh finishes, '
-                'or stop serve.sh with Ctrl-C in its shell.')
-
-
-def read_running(state=None):
-    path = Path(state or STATE) / 'running'
-    for _ in range(5):
-        running = read_json(path)
-        if running is not None:
-            break
-        if not path.exists():
-            return None
-        time.sleep(0.2)
-    if running is None or not pid_alive(running.get('pid')):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        return None
-    return running
-
-
-def stage_run(results, name, invocation):
-    run = read_json(Path(results) / name / 'run.json')
-    return run if run and run.get('invocation') == invocation else None
-
-
-def latest_invocation(results):
-    runs = [run for run in (read_json(path) for path in Path(results).glob('*/run.json')) if run]
-    if not runs:
-        return None
-    latest = max(runs, key=lambda run: run.get('start_utc', ''))
-    return dict(invocation=latest['invocation'], stages=latest['stages'], pid=None,
-                allocation_id=latest.get('allocation_id'))
-
-
-def run_stage(stage, invocation, results, *, runner=subprocess.run, efa_reader=None, label=None, world=None):
-    """The worker's part of one stage: launch, counters, checks, run.json. Returns the exit code."""
-    results = Path(results)
-    world = world or world_size()
-    label = label or os.environ.get('AIM347_ALLOCATION_LABEL', 'aim347')
-    stage_dir = results / stage['name']
-    if stage_dir.exists():
-        attempts = results / 'attempts'
-        attempts.mkdir(exist_ok=True)
-        stage_dir.rename(attempts / f"{stage['name']}-{utc_stamp()}")
-    stage_dir.mkdir(parents=True)
-    command = launch_command(stage, label, results, world)
-    run = dict(stage=stage['name'], subcommand=stage['subcommand'], invocation=invocation['invocation'],
-               stages=invocation['stages'], plan=stage, job_env=stage['job_env'],
-               settings=dict(transport=stage['transport'], attention=stage['attention'], saving=stage['saving']),
-               trainer_argv=command, config=stage['config'], data=stage['data'],
-               allocation_id=invocation.get('allocation_id'), start_utc=time.time(), status='running')
-    write_atomic(stage_dir / 'run.json', json.dumps(run, indent=2) + '\n')
-    log = stage_dir / 'launch.log'
-    efa_reader = efa_reader or read_efa_on_nodes
-    try:
-        with log.open('a') as stream:
-            write_atomic(stage_dir / 'efa-before.json', json.dumps(efa_reader(stream), indent=2) + '\n')
-            stream.flush()
-            env = dict(os.environ, LLM_TRANSPORT=stage['transport'])
-            launcher_exit = runner(command, cwd=str(LAB), env=env, stdout=stream, stderr=subprocess.STDOUT).returncode
-            write_atomic(stage_dir / 'efa-after.json', json.dumps(efa_reader(stream), indent=2) + '\n')
-        code, checks, failure = post_run_checks(stage, stage_dir, launcher_exit, world)
-    except BaseException as error:
-        run.update(end_utc=time.time(), exit_status=4, checks=[], status='finished',
-                   failure=f'run.sh stopped the stage: {error!r}')
-        write_atomic(stage_dir / 'run.json', json.dumps(run, indent=2) + '\n')
-        raise
-    run.update(end_utc=time.time(), launcher_exit=launcher_exit, exit_status=code, checks=checks,
-               failure=failure, status='finished')
-    write_atomic(stage_dir / 'run.json', json.dumps(run, indent=2) + '\n')
-    return code
-
-
-def read_efa_on_nodes(log):
-    """One srun step on both nodes, outside the image; errors go to the stage log."""
-    result = subprocess.run(['srun', '--nodes=2', '--ntasks-per-node=1', '--cpus-per-task=1', 'python3',
-                             str(LAB / 'lib' / 'workshop.py'), 'efa-read'],
-                            stdout=subprocess.PIPE, stderr=log, text=True)
-    return merge_efa_readings(result.stdout.splitlines())
-
-
-def combine(code, stage_code):
-    return 4 if 4 in (code, stage_code) else (5 if 5 in (code, stage_code) else 0)
-
-
-def worker(invocation, state=None, **options):
-    """Background part of run.sh: every stage of one subcommand, in order."""
-    state = Path(state or STATE)
-    code = 0
-    try:
-        for stage in invocation['plan']:
-            code = combine(code, run_stage(stage, invocation, results_dir(), **options))
-            if code == 4:
-                break
-    finally:
-        running = read_json(state / 'running')
-        if running and running.get('invocation') == invocation['invocation']:
-            (state / 'running').unlink()
-    return code
-
-
 def rows_sources(stage, stage_dir):
     if stage['kind'] == 'interrupt':
         return [stage_dir / 'campaign' / 'interrupted' / 'rank-0-updates.jsonl',
@@ -1656,54 +1411,61 @@ def rows_sources(stage, stage_dir):
     return [stage_dir / 'train' / 'rank-0-updates.jsonl']
 
 
-def follow_stage(name, invocation, results, *, out=print, interval=1.0, clock=time.monotonic, world=None):
-    """Print one stage's header, rows as they appear, then its result. Returns its exit code."""
-    world = world or world_size()
-    stage_dir = Path(results) / name
-    started = clock()
-    run = stage_run(results, name, invocation['invocation'])
-    while run is None:
-        if not pid_alive(invocation.get('pid')):
-            out(f'[aim347] {name} did not start; see {STATE / "worker.log"}')
-            return 4
-        time.sleep(interval)
-        run = stage_run(results, name, invocation['invocation'])
-    stage = run['plan']
-    for line in header_lines(stage, run.get('allocation_id'), stage_dir):
+def run_stage(stage, results, *, popen=subprocess.Popen, efa_reader=None, out=print, interval=1.0):
+    """One stage inside the batch job: header, launch, rows of rank 0 as they appear, checks, run.json, result.
+
+    Returns 0, 4 when the run failed, or 5 when it finished and a check failed.
+    """
+    results = Path(results)
+    world = world_size()
+    job_id = os.environ.get('SLURM_JOB_ID')
+    stage_dir = results / stage['name']
+    if stage_dir.exists():
+        attempts = results / 'attempts'
+        attempts.mkdir(exist_ok=True)
+        stage_dir.rename(attempts / f"{stage['name']}-{utc_stamp()}")
+    stage_dir.mkdir(parents=True)
+    command = launch_command(stage, os.environ.get('AIM347_ALLOCATION_LABEL', 'aim347'), results, world)
+    run = dict(stage=stage['name'], plan=stage,
+               settings=dict(transport=stage['transport'], attention=stage['attention'], saving=stage['saving']),
+               trainer_argv=command, config=stage['config'], data=stage['data'], allocation_id=job_id,
+               start_utc=time.time(), status='running')
+    write_atomic(stage_dir / 'run.json', json.dumps(run, indent=2) + '\n')
+    for line in header_lines(stage, job_id, stage_dir):
         out(line)
-    live = run.get('status') != 'finished'
     saves = stage['checkpoint_updates'] if stage['saving'] != 'none' and stage['kind'] != 'restore' else None
     sources = rows_sources(stage, stage_dir)
-    printed, segment, waited = 0, 0, 0
     printer = RowPrinter(stage['warmup_updates'], saves)
-    header_done = False
-    while True:
-        rows = read_rows(sources[segment])
-        if rows and not header_done:
-            out(printer.header())
-            header_done = True
-        for row in rows[printed:]:
-            out(printer.line(row))
-        printed = len(rows)
-        finished = (run or {}).get('status') == 'finished'
-        if segment + 1 < len(sources) and sources[segment + 1].exists():
-            segment, printed = segment + 1, 0
-            printer = RowPrinter(stage['warmup_updates'], saves)
-            out(f'[aim347] stopped after update {INTERRUPT_AFTER}; resumed from the last completed checkpoint')
-            continue
-        if finished:
-            break
-        if not pid_alive(invocation.get('pid')):
-            out(f'[aim347] the stage stopped before it finished; see {stage_dir / "launch.log"}')
-            return 4
-        elapsed = int(clock() - started)
-        if live and not rows and elapsed >= waited + 10:
-            waited = elapsed - elapsed % 10
-            out(f'[aim347] {waited} s: ' + ('restarting from the last completed checkpoint' if segment
-                                            else 'starting containers and loading the model'))
-        time.sleep(interval)
-        run = stage_run(results, name, invocation['invocation'])
-    code = run['exit_status']
+    printed, segment, header_done = 0, 0, False
+    efa_reader = efa_reader or read_efa_on_nodes
+    with (stage_dir / 'launch.log').open('a') as log:
+        write_atomic(stage_dir / 'efa-before.json', json.dumps(efa_reader(log), indent=2) + '\n')
+        log.flush()
+        process = popen(command, cwd=str(LAB), env=dict(os.environ, LLM_TRANSPORT=stage['transport']),
+                        stdout=log, stderr=subprocess.STDOUT)
+        while True:
+            # Poll before reading, so that the last read sees every row of a finished launch.
+            finished = process.poll() is not None
+            rows = read_rows(sources[segment])
+            if rows and not header_done:
+                out(printer.header())
+                header_done = True
+            for row in rows[printed:]:
+                out(printer.line(row))
+            printed = len(rows)
+            if segment + 1 < len(sources) and sources[segment + 1].exists():
+                segment, printed = segment + 1, 0
+                printer = RowPrinter(stage['warmup_updates'], saves)
+                out(f'[aim347] stopped after update {INTERRUPT_AFTER}; resumed from the last completed checkpoint')
+                continue
+            if finished:
+                break
+            time.sleep(interval)
+        write_atomic(stage_dir / 'efa-after.json', json.dumps(efa_reader(log), indent=2) + '\n')
+    code, checks, failure = post_run_checks(stage, stage_dir, process.returncode, world)
+    run.update(end_utc=time.time(), launcher_exit=process.returncode, exit_status=code, checks=checks,
+               failure=failure, status='finished')
+    write_atomic(stage_dir / 'run.json', json.dumps(run, indent=2) + '\n')
     if saves is not None and stage['kind'] != 'interrupt' and code != 4 and rows:
         events = read_rows(stage_dir / 'train' / 'checkpoint-events-rank-0.jsonl')
         flush = flush_seconds(rows, events, stage['updates'])
@@ -1715,80 +1477,12 @@ def follow_stage(name, invocation, results, *, out=print, interval=1.0, clock=ti
     return code
 
 
-def follow(invocation, results, **options):
-    code = 0
-    try:
-        for name in invocation['stages']:
-            stage_code = follow_stage(name, invocation, results, **options)
-            code = combine(code, stage_code)
-            if stage_code == 4:
-                break
-    except KeyboardInterrupt:
-        print('\nStill running. Follow it again with: bash tools/run.sh attach')
-        return 0
-    return code
-
-
-def restore_ready(results):
-    run = read_json(Path(results) / 'ckpt-sync' / 'run.json') or {}
-    marker = Path(results) / 'ckpt-sync' / 'train' / 'checkpoints' / f'update-{RESTORE_FROM:06d}' / 'COMPLETED.json'
-    return run.get('exit_status') in (0, 5) and marker.is_file()
-
-
-def sdpa_ready(results):
-    run = read_json(Path(results) / 'sdpa' / 'run.json') or {}
-    return run.get('exit_status') in (0, 5) and (Path(results) / 'sdpa' / 'train' / 'summary.json').is_file()
-
-
-def start_run(subcommand, state=None, change=None):
-    """Foreground part of run.sh. Returns the exit code."""
-    state = Path(state or STATE)
-    results = results_dir()
-    running = read_running(state)
-    if running:
-        current = next((name for name in running['stages']
-                        if (stage_run(results, name, running['invocation']) or {}).get('status') != 'finished'),
-                       running['stages'][0])
-        if subcommand != 'attach':
-            print(f'Stage {current} is still running; following it')
-        return follow(running, results)
-    if subcommand == 'attach':
-        last = latest_invocation(results)
-        if not last:
-            print('No stage has run yet.')
-            return 0
-        return follow(last, results)
-    if not os.environ.get('AIM347_ALLOCATION_ID'):
-        print('AIM347: no session allocation. Run: bash tools/hold-and-measure.sh', file=sys.stderr)
-        return 3
-    if read_serving(state):
-        print(SERVING_BUSY, file=sys.stderr)
-        return 2
-    stages = plan(subcommand, read_job_env(), change=change)
-    if subcommand == 'restore' and not restore_ready(results):
-        raise UsageError(f'restore needs a finished ckpt-sync stage with a completed update-{RESTORE_FROM:06d}. '
-                         'Run: bash tools/run.sh checkpoint')
-    if subcommand == 'try' and not sdpa_ready(results):
-        raise UsageError('try compares your change with stage sdpa, which has no finished run. '
-                         'Run: bash tools/run.sh sdpa')
-    state.mkdir(exist_ok=True)
-    invocation = dict(invocation=utc_stamp(), stages=[stage['name'] for stage in stages], plan=stages,
-                      subcommand=subcommand, allocation_id=os.environ['AIM347_ALLOCATION_ID'], pid=None)
-    try:
-        lock = os.open(state / 'running', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
-        print('Another run.sh is starting a stage; following it')
-        time.sleep(2)
-        return start_run('attach', state)
-    with os.fdopen(lock, 'w') as stream:
-        stream.write(json.dumps(dict(invocation, pid=os.getpid())))
-    with (state / 'worker.log').open('w') as log:
-        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'worker', json.dumps(invocation)],
-                                 cwd=str(LAB), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                 start_new_session=True)
-    invocation['pid'] = child.pid
-    write_atomic(state / 'running', json.dumps(invocation))
-    return follow(invocation, results)
+def read_efa_on_nodes(log):
+    """One srun step on both nodes, outside the image; errors go to the stage log."""
+    result = subprocess.run(['srun', '--nodes=2', '--ntasks-per-node=1', '--cpus-per-task=1', 'python3',
+                             str(LAB / 'lib' / 'workshop.py'), 'efa-read'],
+                            stdout=subprocess.PIPE, stderr=log, text=True)
+    return merge_efa_readings(result.stdout.splitlines())
 
 
 # ---------------------------------------------------------------- optional: NCCL protocols
@@ -1874,18 +1568,11 @@ def protocol_report(out, world):
     return lines, 0
 
 
-def run_protocols(state=None, runner=subprocess.run, env=None):
+def run_protocols(runner=subprocess.run, env=None):
     """tools/nccl-protocols.sh. Returns the exit code."""
     env = dict(os.environ if env is None else env)
     if not env.get('LLM_RESULTS_DIR'):
         raise UsageError('LLM_RESULTS_DIR is not set; open a new shell so it reads aim347.env')
-    if read_running(state):
-        print('AIM347: a stage is still running. Run this tool after it finishes; '
-              'bash tools/run.sh attach follows it.', file=sys.stderr)
-        return 2
-    if read_serving(state):
-        print(SERVING_BUSY, file=sys.stderr)
-        return 2
     stamp = utc_stamp()
     out, suffix = Path(env['LLM_RESULTS_DIR']) / 'nccl-protocols' / stamp, 1
     while out.exists():
@@ -1915,21 +1602,15 @@ def run_protocols(state=None, runner=subprocess.run, env=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    run = commands.add_parser('run', help='tools/run.sh')
-    run.add_argument('subcommand', nargs='?')
-    run.add_argument('change', nargs='?', help='try only: the change to make (' + ', '.join(TRY_CHANGES) + ')')
-    commands.add_parser('worker').add_argument('invocation')
+    run = commands.add_parser('run', help='inside the batch job of tools/run.sh: the stages, in order')
+    run.add_argument('stages', nargs='*')
+    run.add_argument('--list', action='store_true', help='check the names and print them, without running')
     commands.add_parser('nccl-protocols', help='tools/nccl-protocols.sh')
     commands.add_parser('efa-read', help='on a GPU node: EFA counters as one JSON line')
     commands.add_parser('node-probe', help='on a GPU node: GPUs and EFA devices as one JSON line')
     report = commands.add_parser('check-report', help='tools/check.sh output')
     report.add_argument('--sinfo', type=Path, required=True)
     report.add_argument('--nodes', type=Path, required=True)
-    commands.add_parser('granted', help='job ID from salloc output on stdin')
-    allocation = commands.add_parser('write-allocation')
-    allocation.add_argument('--job-id', type=int, required=True)
-    allocation.add_argument('--cpus-per-node', type=int, required=True)
-    allocation.add_argument('--output', type=Path, required=True)
     ceilings = commands.add_parser('ceilings')
     ceilings.add_argument('--dir', type=Path, required=True)
     ceilings.add_argument('--gpus', type=int, required=True)
@@ -1944,15 +1625,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == 'run':
-            if not args.subcommand:
-                raise UsageError(f'usage: bash tools/run.sh <subcommand>; subcommands: {subcommand_list()}')
-            if args.subcommand != 'attach' and args.subcommand not in SUBCOMMANDS:
-                raise UsageError(f'unknown subcommand {args.subcommand!r}; subcommands: {subcommand_list()}')
-            if change_error(args.subcommand, args.change):
-                raise UsageError(change_error(args.subcommand, args.change))
-            return start_run(args.subcommand, change=args.change)
-        if args.command == 'worker':
-            return worker(json.loads(args.invocation))
+            if not args.stages:
+                raise UsageError('usage: bash tools/run.sh <stage> [<stage> ...]; stages: ' + ', '.join(STAGES))
+            stages = [stage_plan(name) for name in args.stages]
+            if args.list:
+                print(' '.join(args.stages))
+                return 0
+            codes = []
+            for stage in stages:
+                codes.append(run_stage(stage, results_dir()))
+                if codes[-1] == 4:
+                    break
+            return 4 if 4 in codes else max(codes)
         if args.command == 'nccl-protocols':
             return run_protocols()
         if args.command == 'efa-read':
@@ -1969,22 +1653,6 @@ def main(argv=None):
             lines, failures = check_lines(dict(os.environ), args.sinfo.read_text(), reports)
             print('\n'.join(lines))
             return 1 if failures else 0
-        if args.command == 'granted':
-            job_id = parse_granted(sys.stdin.read())
-            if job_id is None:
-                return 3
-            print(job_id)
-            return 0
-        if args.command == 'write-allocation':
-            record = parse_scontrol_record(subprocess.run(['scontrol', 'show', 'job', '-o', str(args.job_id)],
-                                                          capture_output=True, text=True, check=True).stdout)
-            nodes = subprocess.run(['scontrol', 'show', 'hostnames', record['NodeList']], capture_output=True,
-                                   text=True, check=True).stdout.split()
-            write_allocation(args.output, args.job_id, record['NodeList'], args.cpus_per_node, len(nodes))
-            print(f"Session allocation {args.job_id}: {', '.join(nodes)}, "
-                  f"{len(nodes) * int(os.environ.get('GPUS_PER_NODE', 8))} GPUs")
-            print('Saved in ~/.aim347/allocation.env. Every tool reads it, also in a new shell.')
-            return 0
         if args.command == 'ceilings':
             result = aggregate_ceilings(args.dir)
             if result['gpu_count'] != args.gpus:

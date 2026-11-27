@@ -253,7 +253,7 @@ def main(argv=None):
         return 2
     name = args.stage or latest_profile_stage(results)
     if not name or not (results / name / 'train').is_dir():
-        print(f'no profile stage {name or "found"} in {results}. Run: bash tools/run.sh profile', file=sys.stderr)
+        print(f'no profile stage {name or "found"} in {results}. Run: bash tools/run.sh profile-socket-eager', file=sys.stderr)
         return 2
     train = results / name / 'train'
     first_rows = workshop.read_rows(train / 'rank-0-updates.jsonl')
