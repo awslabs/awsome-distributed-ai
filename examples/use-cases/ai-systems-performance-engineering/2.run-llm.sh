@@ -8,8 +8,7 @@ lab=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 : "${LLM_DATA_DIR:?Set the prepared model/tokens directory}"
 : "${LLM_RESULTS_DIR:?Set the result root on shared storage, or explicitly use node-local output}"
 : "${NCCL_SOCKET_IFNAME:?Set the verified private interface}"
-: "${SLURM_JOB_CPUS_PER_NODE:?}"
-cpus_per_node=$(PYTHONPATH="$lab/lib" python3 -c 'import os; from serve_llm import allocation_cpus; print(allocation_cpus(os.environ["SLURM_JOB_CPUS_PER_NODE"], int(os.environ["SLURM_JOB_NUM_NODES"])))')
+: "${AIM347_CPUS_PER_NODE:?Set the CPUs of one node}"
 mounts="$lab:/opt/aim347,$LLM_DATA_DIR:/data,$LLM_RESULTS_DIR:/results,$LLM_RESULTS_DIR:$LLM_RESULTS_DIR"
 first_node=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 MASTER_ADDR=$(scontrol show node "$first_node" -o | tr ' ' '\n' | sed -n 's/^NodeAddr=//p')
@@ -39,7 +38,7 @@ if [[ -n ${LLM_CONTAINER_NAME:-} ]]; then
     container_name=(--container-name="$LLM_CONTAINER_NAME")
 fi
 exec srun --nodes="$NNODES" --ntasks="$NNODES" --ntasks-per-node=1 \
-    --cpus-per-task="$cpus_per_node" --mpi=none --cpu-bind=none \
+    --cpus-per-task="$AIM347_CPUS_PER_NODE" --mpi=none --cpu-bind=none \
     --container-image="$LAB_IMAGE" ${container_name[@]+"${container_name[@]}"} \
     --container-mounts="$mounts" \
     --container-workdir=/opt/aim347 --no-container-remap-root \

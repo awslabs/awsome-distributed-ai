@@ -178,9 +178,9 @@ Exit status: 0; 2 for usage; 4 when a run fails (the tool prints the last 40 lin
 bash tools/serve.sh
 ```
 
-Serves SmolLM2-1.7B at the pinned revision with vLLM 0.20.2 on both nodes and measures how fast it decodes. Decode is the part of serving that generates a request's output, one token per step. The workshop does not need it. The tool needs the image `images/vllm-v0.20.2.sqsh` in the stage directory (or the path in `VLLM_IMAGE`), checked on both nodes, which `facilitator/prepare-event.sh --with-serving` imports.
+Serves SmolLM2-1.7B at the pinned revision with vLLM 0.20.2 on both nodes and measures how fast it decodes. Decode is the part of serving that generates a request's output, one token per step. The workshop does not need it. The tool needs the image `images/vllm-v0.20.2.sqsh` in the stage directory (or the path in `VLLM_IMAGE`), which `facilitator/prepare-event.sh --with-serving` imports.
 
-It starts `8.serve-llm.sh --tensor-parallel-size 1 --config configs/smol-2048.json` as one `srun` step: one server per GPU, 16 in all, each with the whole model snapshot that provisioning downloaded to `data/model`. Server n of a node listens on port 8100 + n. Every 15 seconds it prints how many servers answer `/health`, and it gives up after 1,200 seconds. When all answer, `lib/serve_llm.py --collect-manifest` records each server's command and GPU, and the tool sends one warm-up request to each server. It then measures four levels, with 1, 4, 16 and 64 requests per GPU running at the same time. At each level every server gets that many client slots, and each slot sends two requests in turn. Each request is a completion of a fixed prompt that generates exactly 256 tokens (`ignore_eos`).
+It starts `8.serve-llm.sh` as one `srun` step: one server per GPU, 16 in all, each with the whole model snapshot that provisioning downloaded to `data/model`. The server of GPU n of a node listens on port 8100 + n. Every 15 seconds it prints how many servers answer `/health`, and it gives up after 1,200 seconds. When all answer, the tool sends one warm-up request to each server. It then measures four levels, with 1, 4, 16 and 64 requests per GPU running at the same time. At each level every server gets that many client slots, and each slot sends two requests in turn. Each request is a completion of a fixed prompt that generates exactly 256 tokens (`ignore_eos`).
 
 The step time comes from each server's own counters, read before and after a level: the sum of `vllm:inter_token_latency_seconds` divided by its count is the mean time from one generated token of a request to the next. With every running request in each step, that is the time of one decode step. `lib/serving_metrics.py` checks that the counters moved by exactly the level's requests and tokens, so other traffic is refused. The tool prints one row per level, with the median over the servers:
 
@@ -191,7 +191,7 @@ The step time comes from each server's own counters, read before and after a lev
 | `decode tokens/s per GPU` | Requests per GPU ÷ seconds per step |
 | `MBU` | The time that reading the weights at your memory-read ceiling takes, as a share of the step: 3,422,752,768 bytes (1,711,376,384 BF16 parameters) ÷ the ceiling in `ceilings.json` ÷ seconds per step. It counts the weights only. The ceiling is the rate of the 1 GiB streaming-read kernel, and a decode step can read faster, so MBU can exceed 100 %. `n/a` without `ceilings.json` |
 
-Before the rows it prints the time to read the weights at the ceiling and the decode rate of one request per GPU at a step of that time, the ceiling ÷ the weight bytes. Then it stops the servers by sending SIGTERM to the step with `scancel --signal=TERM`, so that `lib/serve_llm.py` stops its vLLM processes. Ctrl-C, SIGTERM and a closed terminal (SIGHUP) also stop the servers. Everything goes to `$LLM_RESULTS_DIR/serving-<UTC>/`: `launch.log` (the step's output), `node-<n>/replica-<n>.log` (each server's log), `manifest.json`, `endpoints.txt` and `serving.json` (every level with each server's counter differences). The directory has no `run.json`, so `progression.py` does not list it.
+Before the rows it prints the time to read the weights at the ceiling and the decode rate of one request per GPU at a step of that time, the ceiling ÷ the weight bytes. The servers run in a step of the allocation that `salloc` holds for the tool, so they end when the tool ends, also after Ctrl-C or a closed terminal. Everything goes to `$LLM_RESULTS_DIR/serving-<UTC>/`: `launch.log` (the step's output), `<node>-gpu<n>.log` (each server's log) and `serving.json` (every level with each server's counter differences). The directory has no `run.json`, so `progression.py` does not list it.
 
 Exit status: 0; 2 for usage or without the image; 4 when the servers do not all answer or a request fails (the tool prints the last 40 lines of `launch.log`); 5 when the counters do not match the requests; 130 when interrupted.
 
@@ -243,7 +243,7 @@ Exit status: 0; 1 when `--verify` times out (the message names the condition it 
 The CPU tests of the tools need only the standard library:
 
 ```bash
-PYTHONPATH=lib python3 -m unittest tests.test_workshop_tools tests.test_serving_decode -v
+PYTHONPATH=lib python3 -m unittest tests.test_workshop_tools tests.test_serving_decode tests.test_serving_metrics -v
 ```
 
 `tests/test_progression_golden.py` compares the table of `tools/progression.py` with `tests/fixtures/spain-20261103/progression.md`, for the result files of the run on two `g7.48xlarge` of 2026-11-03 in that directory.
