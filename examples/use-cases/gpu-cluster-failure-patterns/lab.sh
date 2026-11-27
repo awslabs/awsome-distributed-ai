@@ -20,11 +20,12 @@ collected=$HOME/aim344-results/collected
 reason=aim344-device-recovery
 
 # Runs a command on the target: as a step of your running allocation when you
-# hold one there, otherwise as a job of its own. A drained node starts no new
-# job, so that srun gives up after 30 seconds instead of waiting in the queue.
+# hold one there, otherwise as a job of its own with the node's GPUs. A drained
+# node starts no new job, so that srun gives up after 30 seconds instead of
+# waiting in the queue.
 on_target() {
     local job
-    local -a where=(--partition="$PARTITION" --immediate=30)
+    local -a where=(--partition="$PARTITION" --gres="gpu:$GPUS_PER_NODE" --immediate=30)
     job=$(squeue -h -u "$USER" -w "$target" -t RUNNING -o %i | head -n 1)
     [[ -z $job ]] || where=(--jobid="$job" --overlap)
     srun "${where[@]}" --nodelist="$target" --nodes=1 --ntasks=1 --mpi=none "$@" < /dev/null
