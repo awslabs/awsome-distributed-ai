@@ -1050,7 +1050,8 @@ def read_efa_on_nodes(log):
 # ---------------------------------------------------------------- optional: NCCL protocols
 
 # tools/nccl-protocols.sh runs all_reduce_perf over EFA with OFI_NCCL_PROTOCOL=RDMA
-# twice: with NCCL's own protocol choice, then with NCCL_PROTO=Simple.
+# twice: with NCCL's own protocol choice, then with NCCL_PROTO=Simple. Each run's table
+# and NCCL logs are in the directory of its name.
 PROTOCOL_RUNS = (('nccl-choice', 'NCCL_PROTO not set'), ('simple', 'NCCL_PROTO=Simple'))
 # Rank 0 prints one such line per collective when NCCL_DEBUG_SUBSYS includes TUNING.
 NCCL_TUNING = re.compile(r'NCCL INFO AllReduce: (\d+) Bytes -> Algo (\S+) proto (\S+)')
@@ -1079,20 +1080,6 @@ def tuning_choices(text):
 
 def size_text(size):
     return f'{size // 2**20} MiB' if size % 2**20 == 0 else f'{size:,} B'
-
-
-def protocol_command(variant, out, env, lab=LAB):
-    """The srun step of one run: one MPI rank per GPU on both nodes, in the training image."""
-    gpus = int(env.get('GPUS_PER_NODE', 8))
-    command = ['srun', '--nodes=2', f'--ntasks={2 * gpus}', f'--ntasks-per-node={gpus}',
-               f"--cpus-per-task={int(env['AIM347_CPUS_PER_NODE']) // gpus}", '--mpi=pmix', '--cpu-bind=none',
-               '--time=10', f"--container-image={env['LAB_IMAGE']}"]
-    if env.get('LLM_CONTAINER_NAME'):
-        command.append(f"--container-name={env['LLM_CONTAINER_NAME']}")
-    command += [f"--container-mounts={lab}:/opt/aim347,{env['LLM_RESULTS_DIR']}:{env['LLM_RESULTS_DIR']}",
-                '--container-workdir=/opt/aim347', '--no-container-remap-root', '--container-env=NCCL_SOCKET_IFNAME',
-                'bash', 'lib/nccl-protocols-rank.sh', variant, str(Path(out) / variant)]
-    return command
 
 
 def protocol_report(out, world):
@@ -1129,34 +1116,6 @@ def protocol_report(out, world):
     return lines, 0
 
 
-def run_protocols(runner=subprocess.run, env=None):
-    """tools/nccl-protocols.sh. Returns the exit code."""
-    env = dict(os.environ if env is None else env)
-    if not env.get('LLM_RESULTS_DIR'):
-        raise UsageError('LLM_RESULTS_DIR is not set; open a new shell so it reads aim347.env')
-    stamp = utc_stamp()
-    out, suffix = Path(env['LLM_RESULTS_DIR']) / 'nccl-protocols' / stamp, 1
-    while out.exists():
-        suffix += 1
-        out = out.with_name(f'{stamp}-{suffix}')
-    world = 2 * int(env.get('GPUS_PER_NODE', 8))
-    print(f'[aim347] all_reduce_perf, 1 MiB to 64 MiB, on {world} GPUs over EFA with OFI_NCCL_PROTOCOL=RDMA')
-    print(f'[aim347] results {out}')
-    for number, (variant, label) in enumerate(PROTOCOL_RUNS, 1):
-        (out / variant).mkdir(parents=True)
-        print(f'[aim347] run {number} of {len(PROTOCOL_RUNS)}: {label}', flush=True)
-        with (out / variant / 'all_reduce_perf.txt').open('w') as stream:
-            code = runner(protocol_command(variant, out, env), stdout=stream, stderr=subprocess.STDOUT).returncode
-        if code != 0:
-            print(f'[aim347] run {number} ({label}) failed with exit status {code}; '
-                  f"last 40 lines of {out / variant / 'all_reduce_perf.txt'}:")
-            print('\n'.join(tail(out / variant / 'all_reduce_perf.txt')))
-            return 4
-    lines, code = protocol_report(out, world)
-    print('\n'.join(lines))
-    return code
-
-
 # ---------------------------------------------------------------- command line
 
 def main(argv=None):
@@ -1165,7 +1124,8 @@ def main(argv=None):
     run = commands.add_parser('run', help='inside the batch job of tools/run.sh: the stages, in order')
     run.add_argument('stages', nargs='*')
     run.add_argument('--list', action='store_true', help='check the names and print them, without running')
-    commands.add_parser('nccl-protocols', help='tools/nccl-protocols.sh')
+    table = commands.add_parser('nccl-protocols-table', help='the two runs of tools/nccl-protocols.sh side by side')
+    table.add_argument('dir', type=Path)
     commands.add_parser('efa-read', help='on a GPU node: EFA counters as one JSON line')
     ceilings = commands.add_parser('ceilings')
     ceilings.add_argument('--dir', type=Path, required=True)
@@ -1189,8 +1149,10 @@ def main(argv=None):
                 if codes[-1] == 4:
                     break
             return 4 if 4 in codes else max(codes)
-        if args.command == 'nccl-protocols':
-            return run_protocols()
+        if args.command == 'nccl-protocols-table':
+            lines, code = protocol_report(args.dir, world_size())
+            print('\n'.join(lines))
+            return code
         if args.command == 'efa-read':
             devices, errors = read_efa_counters()
             for error in errors:
