@@ -48,10 +48,6 @@ def _durable_file(path, write):
 
 
 def latest_completed(root):
-    # Rolling archival leaves lightweight completion records but relocates tensors.
-    # A source campaign with an archive index is not a local restore candidate.
-    if (Path(root).parent / 'S3_ARCHIVE.json').is_file() or (Path(root).parent.parent / 'S3_ARCHIVE.json').is_file():
-        return None
     completed = []
     for marker in Path(root).glob('update-*/COMPLETED.json'):
         row = json.loads(marker.read_text())
@@ -61,35 +57,30 @@ def latest_completed(root):
 
 
 class Checkpoints:
-    """One outstanding DCP write; both modes save exactly the same state."""
+    """One outstanding DCP write; both modes save exactly the same state.
 
-    def __init__(self, root, model, optimizer, scheduler, *, asynchronous=False, group=None,
-                 writer_threads=1, copy_ahead_bytes=10_000_000, process_async=False):
-        if writer_threads < 1:
-            raise ValueError('checkpoint writer threads must be positive')
-        if copy_ahead_bytes < 1:
-            raise ValueError('checkpoint copy-ahead bytes must be positive')
+    Without `process`, save() returns after the checkpoint is written and marked complete. With it,
+    save() returns after starting a staged copy, a child process writes the copy while training
+    continues, and poll() or finish() marks the checkpoint complete.
+    """
+
+    def __init__(self, root, model, optimizer, scheduler, *, process=False, group=None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.model, self.optimizer, self.scheduler = model, optimizer, scheduler
-        self.asynchronous = asynchronous
-        self.writer_threads = writer_threads
-        self.copy_ahead_bytes = copy_ahead_bytes
+        self.process = process
         self.group = group
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.world = dist.get_world_size() if dist.is_initialized() else 1
         self.pending = None
         self.durable_progress = None
-        self.process_async = process_async
         self.staging_future = None
         self.snapshot_sources = None
         self.stager = None
         self.planner = None
         self.save_count = 0
         self.source_storage_refs = {}
-        if process_async:
-            if not asynchronous:
-                raise ValueError('process checkpointing requires asynchronous mode')
+        if process:
             from torch.distributed.checkpoint.staging import DefaultStager, StagingOptions
             from torch.distributed.checkpoint.default_planner import DefaultSavePlanner
             self.stager = DefaultStager(StagingOptions(
@@ -99,15 +90,9 @@ class Checkpoints:
             _OPEN_CHECKPOINTERS.append(self)
 
     def event(self, phase, **fields):
-        memory = {}
-        if phase in ('save_start', 'staging_fence', 'globally_complete'):
-            for line in Path('/proc/self/status').read_text().splitlines():
-                if line.startswith(('VmRSS:', 'VmLck:')):
-                    key, value, _ = line.split()
-                    memory[key.rstrip(':') + '_bytes'] = int(value) * 1024
         with (self.root.parent / f'checkpoint-events-rank-{self.rank}.jsonl').open('a') as stream:
             stream.write(json.dumps(dict(phase=phase, monotonic_seconds=time.perf_counter(),
-                                         save_count=self.save_count, **memory, **fields)) + '\n')
+                                         save_count=self.save_count, **fields)) + '\n')
 
     def before_source_reuse(self):
         """Fence before next FSDP forward/zero_grad, not merely optimizer.step."""
@@ -117,22 +102,7 @@ class Checkpoints:
             # v2.9.1 async_save's already-done callback can mask a staging
             # exception. The stager's public synchronization also checks it.
             self.stager.synchronize_staging()
-            wait_seconds = time.perf_counter() - started
-            storages = {}
-            def collect(value):
-                if isinstance(value, torch.Tensor):
-                    local = value.to_local() if hasattr(value, 'to_local') else value
-                    storage = local.untyped_storage()
-                    storages[storage.data_ptr()] = storage
-                elif isinstance(value, dict):
-                    for item in value.values():
-                        collect(item)
-                elif isinstance(value, (tuple, list)):
-                    for item in value:
-                        collect(item)
-            collect(self.snapshot_sources)
-            self.event('staging_fence', wait_seconds=wait_seconds,
-                       snapshot_source_storage_bytes=sum(s.nbytes() for s in storages.values()))
+            self.event('staging_fence', wait_seconds=time.perf_counter() - started)
             self.staging_future = None
             self.snapshot_sources = None
 
@@ -187,7 +157,7 @@ class Checkpoints:
         with record_function('checkpoint/state_dict'):
             model, optimizer = get_state_dict(self.model, self.optimizer)
         state = {'model': model, 'optimizer': optimizer}
-        if self.process_async:
+        if self.process:
             # Keep native weak-cache keys alive across saves. Only source storage
             # wrappers are retained; copying still fences before source reuse.
             def retain(value):
@@ -204,13 +174,11 @@ class Checkpoints:
             retain(state)
             self.event('retained_source_storages', count=len(self.source_storage_refs),
                        bytes=sum(s.nbytes() for s in self.source_storage_refs.values()))
-        writer = dcp.FileSystemWriter(path, sync_files=True, thread_count=self.writer_threads,
-                                      # PROCESS receives CPU-staged tensors; the GPU copy
-                                      # loader otherwise initializes a needless child CUDA
-                                      # context on default GPU0 (native 2.9.1).
-                                      per_thread_copy_ahead=0 if self.process_async else self.copy_ahead_bytes)
-        if self.process_async:
+        if self.process:
             from torch.distributed.checkpoint.state_dict_saver import AsyncCheckpointerType
+            # The child receives CPU-staged tensors. With a copy-ahead buffer its GPU copy
+            # loader would initialize a needless CUDA context on GPU 0 (native 2.9.1).
+            writer = dcp.FileSystemWriter(path, sync_files=True, per_thread_copy_ahead=0)
             # The staging stream does not wait on the producer CUDA stream.
             torch.cuda.synchronize()
             self.snapshot_sources = state
@@ -227,24 +195,15 @@ class Checkpoints:
             future.add_done_callback(
                 lambda f: self.event('upload_complete', checkpoint_sequence=count,
                                      failed=f.exception() is not None))
-        elif self.asynchronous:
-            # Default FileSystemWriter stages synchronously to an independent CPU
-            # snapshot before returning; only the disk write overlaps updates.
-            with record_function('checkpoint/dcp_async_stage_and_submit'):
-                future = dcp.async_save(state, storage_writer=writer, process_group=self.group)
-            self.event('staging_complete', checkpoint_sequence=self.save_count, failed=False)
-            count = self.save_count
-            future.add_done_callback(
-                lambda f: self.event('upload_complete', checkpoint_sequence=count,
-                                     failed=f.exception() is not None))
         else:
             with record_function('checkpoint/dcp_sync_write'):
-                dcp.save(state, storage_writer=writer, process_group=self.group)
+                dcp.save(state, storage_writer=dcp.FileSystemWriter(path, sync_files=True),
+                         process_group=self.group)
             future = None
             self.event('upload_complete', checkpoint_sequence=self.save_count, failed=False)
         self.pending = (path, dict(progress), future)
         self.event('save_return', update=progress['completed_updates'])
-        if not self.asynchronous:
+        if not self.process:
             self.finish()
 
     def finish(self):
@@ -266,7 +225,7 @@ class Checkpoints:
         self.event('globally_complete', update=progress['completed_updates'])
 
     def poll(self):
-        """Publish completed async saves at update boundaries.
+        """Mark a process-mode save complete at an update boundary, once every rank's write has finished.
 
         Readiness uses the training group, separate from DCP's background group.
         """
@@ -283,10 +242,6 @@ class Checkpoints:
 
     def restore(self, path, *, expected_workload):
         path = Path(path)
-        for parent in (path.parent.parent, path.parent.parent.parent):
-            index = parent / 'S3_ARCHIVE.json'
-            if index.is_file():
-                raise ValueError(f'checkpoint tensors were archived; restore the verified archive to a new directory using {index}')
         progress = json.loads((path / 'COMPLETED.json').read_text())
         if progress['workload'] != expected_workload:
             raise ValueError('resume workload does not match the completed checkpoint')

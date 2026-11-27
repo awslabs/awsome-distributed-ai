@@ -195,8 +195,7 @@ def main():
         args.output.mkdir(parents=True, exist_ok=False)
     dist.barrier()
     saves = Checkpoints(args.output / 'checkpoints', model, optimizer, scheduler,
-                        asynchronous=args.checkpoint_mode == 'process', group=checkpoint_group,
-                        process_async=args.checkpoint_mode == 'process')
+                        process=args.checkpoint_mode == 'process', group=checkpoint_group)
     synchronize = torch.cuda.synchronize if not args.cpu_fixture else lambda: None
     start_update = 0
     useful_tokens = 0

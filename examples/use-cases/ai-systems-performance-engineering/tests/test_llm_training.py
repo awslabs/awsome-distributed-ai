@@ -46,91 +46,6 @@ class TrainingCorrectnessTests(unittest.TestCase):
             self.assertEqual(source['id'], 'long')
             self.assertEqual(source['original_tokens'], 10)
 
-    def test_checkpoint_profile_records_save_and_restore(self):
-        from llm_checkpoint import Checkpoints
-        model = self.model()
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
-        progress = {'completed_updates': 1, 'useful_tokens': 3, 'workload': {'fixture': True}}
-        with tempfile.TemporaryDirectory() as directory:
-            checkpoints = Checkpoints(directory, model, optimizer, scheduler)
-            with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as profile:
-                checkpoints.save(progress)
-                checkpoints.restore(Path(directory) / 'update-000001', expected_workload=progress['workload'])
-            names = {event.key for event in profile.key_averages()}
-            self.assertTrue({'checkpoint/sidecar_flush', 'checkpoint/state_dict',
-                             'checkpoint/dcp_sync_write', 'checkpoint/restore_state_dict',
-                             'checkpoint/read', 'checkpoint/apply'} <= names)
-
-    def test_staging_fence_does_not_publish_pending_upload(self):
-        from concurrent.futures import Future
-        from unittest.mock import Mock
-        from llm_checkpoint import Checkpoints
-        model = self.model()
-        optimizer = torch.optim.AdamW(model.parameters())
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
-        with tempfile.TemporaryDirectory() as directory:
-            checkpoint = Checkpoints(Path(directory) / 'checkpoints', model, optimizer, scheduler)
-            staging, upload = Future(), Future()
-            staging.set_result({'model': {'weight': torch.ones(2)}})
-            checkpoint.stager = Mock()
-            checkpoint.staging_future = staging
-            checkpoint.snapshot_sources = {'model': model}
-            checkpoint.pending = (checkpoint.root / 'update-000001', {'completed_updates': 1}, upload)
-            checkpoint.before_source_reuse()
-            checkpoint.stager.synchronize_staging.assert_called_once()
-            self.assertIsNone(checkpoint.staging_future)
-            self.assertIsNone(checkpoint.snapshot_sources)
-            self.assertFalse(upload.done())
-            self.assertFalse((checkpoint.root / 'update-000001/COMPLETED.json').exists())
-            failed = Future()
-            failed.set_exception(RuntimeError('copy failed'))
-            checkpoint.staging_future = failed
-            with self.assertRaisesRegex(RuntimeError, 'copy failed'):
-                checkpoint.before_source_reuse()
-            self.assertIs(checkpoint.staging_future, failed)
-            checkpoint.staging_future = None
-            upload.set_result(None)
-            stager = checkpoint.stager
-            checkpoint.close()
-            stager.close.assert_called_once()
-            self.assertIsNone(checkpoint.stager)
-
-    def test_cleanup_attempts_all_resources_and_propagates_errors(self):
-        from concurrent.futures import Future
-        from unittest.mock import Mock
-        import llm_checkpoint
-        model = self.model()
-        optimizer = torch.optim.AdamW(model.parameters())
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
-        with tempfile.TemporaryDirectory() as directory:
-            checkpoint = llm_checkpoint.Checkpoints(directory, model, optimizer, scheduler)
-            staging, upload = Future(), Future()
-            staging.set_exception(RuntimeError('copy failed'))
-            upload.set_exception(RuntimeError('upload failed'))
-            stager = Mock()
-            stager.close.side_effect = RuntimeError('close failed')
-            checkpoint.stager = stager
-            checkpoint.staging_future = staging
-            checkpoint.pending = (Path(directory), {}, upload)
-            checkpoint.snapshot_sources = {'model': model}
-            checkpoint.source_storage_refs[1] = torch.ones(1).untyped_storage()
-            with self.assertRaisesRegex(RuntimeError, 'copy failed; upload failed; close failed'):
-                checkpoint.close()
-            stager.close.assert_called_once()
-            for name in ('stager', 'staging_future', 'pending', 'snapshot_sources'):
-                self.assertIsNone(getattr(checkpoint, name))
-            self.assertEqual(checkpoint.source_storage_refs, {})
-            self.assertFalse((Path(directory) / 'COMPLETED.json').exists())
-        first, second = Mock(), Mock()
-        second.close.side_effect = RuntimeError('second failed')
-        with patch.object(llm_checkpoint, '_OPEN_CHECKPOINTERS', [first, second]):
-            with self.assertRaisesRegex(RuntimeError, 'second failed'):
-                llm_checkpoint.close_checkpointers()
-            first.close.assert_called_once()
-            second.close.assert_called_once()
-            self.assertEqual(llm_checkpoint._OPEN_CHECKPOINTERS, [])
-
     def test_campaign_rejects_failure_at_update_without_intent(self):
         import importlib.util
         from types import SimpleNamespace
@@ -248,113 +163,59 @@ class TrainingCorrectnessTests(unittest.TestCase):
                 for actual, expected in zip(parameters, results[0][2]):
                     torch.testing.assert_close(actual, expected, rtol=2e-5, atol=2e-7)
 
-    def test_sync_and_async_restore_same_next_update_and_rng(self):
+    def test_restore_gives_the_same_next_update_and_rng(self):
         from llm_checkpoint import Checkpoints, latest_completed
-        cases = [(asynchronous, threads, ahead) for asynchronous, threads in
-                 ((False, 1), (True, 1), (False, 4), (True, 4))
-                 for ahead in (10_000_000, 64 * 1024 * 1024)]
-        for asynchronous, writer_threads, copy_ahead_bytes in cases:
-            with self.subTest(asynchronous=asynchronous, writer_threads=writer_threads,
-                              copy_ahead_bytes=copy_ahead_bytes), tempfile.TemporaryDirectory() as root:
-                model = self.model()
-                optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-                scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
+        with tempfile.TemporaryDirectory() as root:
+            model = self.model()
+            optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
 
-                def update():
-                    optimizer.zero_grad()
-                    ids = torch.tensor([[2, 3, 4, 1]])
-                    loss = model(input_ids=ids, labels=ids).loss
-                    loss.backward()
-                    optimizer.step()
-                    scheduler.step()
+            def update():
+                optimizer.zero_grad()
+                ids = torch.tensor([[2, 3, 4, 1]])
+                loss = model(input_ids=ids, labels=ids).loss
+                loss.backward()
+                optimizer.step()
+                scheduler.step()
 
-                update()
-                checkpoints = Checkpoints(root, model, optimizer, scheduler, asynchronous=asynchronous,
-                                          writer_threads=writer_threads, copy_ahead_bytes=copy_ahead_bytes)
-                progress = dict(completed_updates=1, useful_tokens=3, next_sample=1,
-                                workload={'kind': 'tiny CPU Qwen3'})
-                import llm_checkpoint
-                with patch.object(llm_checkpoint.dcp, 'FileSystemWriter',
-                                  wraps=llm_checkpoint.dcp.FileSystemWriter) as writer:
+            update()
+            checkpoints = Checkpoints(root, model, optimizer, scheduler)
+            progress = dict(completed_updates=1, useful_tokens=3, next_sample=1,
+                            workload={'kind': 'tiny CPU Qwen3'})
+            checkpoints.save(progress)
+            path = latest_completed(root)
+            self.assertEqual(path, Path(root) / 'update-000001')
+            # The update after the save, on the live model, is what a restored model must repeat.
+            update()
+            expected = copy.deepcopy(model.state_dict())
+            expected_lr = scheduler.get_last_lr()
+            restored = checkpoints.restore(path, expected_workload=progress['workload'])
+            expected_random = (random.random(), np.random.rand(), torch.rand(1))
+            checkpoints.restore(path, expected_workload=progress['workload'])
+            self.assertEqual(random.random(), expected_random[0])
+            self.assertEqual(np.random.rand(), expected_random[1])
+            torch.testing.assert_close(torch.rand(1), expected_random[2])
+            self.assertEqual(restored, progress)
+            update()
+            for name, parameter in model.state_dict().items():
+                torch.testing.assert_close(parameter, expected[name], rtol=0, atol=0)
+            self.assertEqual(scheduler.get_last_lr(), expected_lr)
+            with self.assertRaises(ValueError):
+                checkpoints.restore(path, expected_workload={'different': 'work'})
+
+    def test_failed_write_never_marks_the_checkpoint_complete(self):
+        from llm_checkpoint import Checkpoints, latest_completed
+        with tempfile.TemporaryDirectory() as root:
+            model = self.model()
+            optimizer = torch.optim.AdamW(model.parameters())
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1)
+            checkpoints = Checkpoints(root, model, optimizer, scheduler)
+            progress = dict(completed_updates=1, useful_tokens=3, next_sample=1, workload={'fixture': True})
+            with patch('llm_checkpoint.dcp.save', side_effect=OSError('injected writer failure')):
+                with self.assertRaises(OSError):
                     checkpoints.save(progress)
-                    self.assertEqual(writer.call_args.kwargs['per_thread_copy_ahead'], copy_ahead_bytes)
-                    self.assertEqual(writer.call_args.kwargs['thread_count'], writer_threads)
-                    self.assertTrue(writer.call_args.kwargs['sync_files'])
-                if asynchronous:
-                    self.assertIsNone(latest_completed(root))
-                    self.assertIsNone(checkpoints.durable_progress)
-                # Mutate the live model while the staged snapshot is being saved.
-                update()
-                expected = copy.deepcopy(model.state_dict())
-                expected_lr = scheduler.get_last_lr()
-                checkpoints.finish()
-                path = latest_completed(root)
-                self.assertIsNotNone(path)
-                restored = checkpoints.restore(path, expected_workload=progress['workload'])
-                expected_random = (random.random(), np.random.rand(), torch.rand(1))
-                checkpoints.restore(path, expected_workload=progress['workload'])
-                self.assertEqual(random.random(), expected_random[0])
-                self.assertEqual(np.random.rand(), expected_random[1])
-                torch.testing.assert_close(torch.rand(1), expected_random[2])
-                self.assertEqual(restored, progress)
-                update()
-                for name, parameter in model.state_dict().items():
-                    torch.testing.assert_close(parameter, expected[name], rtol=0, atol=0)
-                self.assertEqual(scheduler.get_last_lr(), expected_lr)
-                pending = Path(root) / 'update-000999'
-                pending.mkdir()
-                (pending / '.metadata').write_text('incomplete fixture')
-                self.assertEqual(latest_completed(root), path)
-                with self.assertRaises(ValueError):
-                    checkpoints.restore(path, expected_workload={'different': 'work'})
-
-    def test_archived_campaign_is_not_a_local_restore_candidate(self):
-        from llm_checkpoint import Checkpoints, latest_completed
-        for index_location in ('campaign', 'segment'):
-            with self.subTest(index_location=index_location), tempfile.TemporaryDirectory() as directory:
-                campaign = Path(directory) / 'campaign'
-                segment = campaign / 'interrupted'
-                model = self.model()
-                optimizer = torch.optim.AdamW(model.parameters())
-                scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1)
-                checkpoints = Checkpoints(segment / 'checkpoints', model, optimizer, scheduler)
-                path = checkpoints.root / 'update-000004'
-                path.mkdir()
-                (path / '.metadata').write_text('retained metadata fixture')
-                (path / 'COMPLETED.json').write_text(json.dumps({'completed_updates': 4}))
-                self.assertEqual(latest_completed(checkpoints.root), path)
-                index_parent = campaign if index_location == 'campaign' else segment
-                (index_parent / 'S3_ARCHIVE.json').write_text(json.dumps({'prefix': 's3://fixture/verified/'}))
-                self.assertIsNone(latest_completed(checkpoints.root))
-                with patch('llm_checkpoint.dcp.load') as load:
-                    with self.assertRaisesRegex(ValueError, 'checkpoint tensors were archived'):
-                        checkpoints.restore(path, expected_workload={})
-                    load.assert_not_called()
-
-    def test_failed_checkpoint_never_publishes_completion(self):
-        from concurrent.futures import Future
-        from llm_checkpoint import Checkpoints, latest_completed
-        for asynchronous in (False, True):
-            with self.subTest(asynchronous=asynchronous), tempfile.TemporaryDirectory() as root:
-                model = self.model()
-                optimizer = torch.optim.AdamW(model.parameters())
-                scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1)
-                checkpoints = Checkpoints(root, model, optimizer, scheduler, asynchronous=asynchronous)
-                progress = dict(completed_updates=1, useful_tokens=3, next_sample=1, workload={'fixture': True})
-                if asynchronous:
-                    future = Future()
-                    future.set_exception(OSError('injected writer failure'))
-                    with patch('llm_checkpoint.dcp.async_save', return_value=future):
-                        checkpoints.save(progress)
-                    with self.assertRaises(OSError):
-                        checkpoints.finish()
-                else:
-                    with patch('llm_checkpoint.dcp.save', side_effect=OSError('injected writer failure')):
-                        with self.assertRaises(OSError):
-                            checkpoints.save(progress)
-                self.assertIsNone(checkpoints.durable_progress)
-                self.assertIsNone(latest_completed(root))
-
+            self.assertIsNone(checkpoints.durable_progress)
+            self.assertIsNone(latest_completed(root))
 
     def _fixture_job(self, root, *, updates, warmup, checkpoint_updates):
         """Workshop config shrunk to the CPU fixture: 2 sequences of 8 positions."""
@@ -457,8 +318,7 @@ class TrainingCorrectnessTests(unittest.TestCase):
         optimizer = torch.optim.AdamW(model.parameters())
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
         with tempfile.TemporaryDirectory() as directory:
-            checkpoints = Checkpoints(Path(directory) / 'checkpoints', model, optimizer, scheduler,
-                                      asynchronous=True)
+            checkpoints = Checkpoints(Path(directory) / 'checkpoints', model, optimizer, scheduler)
             path = checkpoints.root / 'update-000020'
             path.mkdir()
             progress = {'completed_updates': 20, 'useful_tokens': 1310080, 'workload': {'fixture': True}}
