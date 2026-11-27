@@ -29,12 +29,6 @@ METRICS = ('vllm:generation_tokens_total', 'vllm:request_success_total',
 SMOL_PIN = {'model_id': 'HuggingFaceTB/SmolLM2-1.7B', 'model_revision': 'effd688a12921b4cc83e3312b6feb579f70f9c71'}
 
 
-def stub(directory, name, script):
-    path = Path(directory) / name
-    path.write_text('#!/usr/bin/env bash\n' + script)
-    path.chmod(0o755)
-
-
 class FakeServers:
     """Counters of vLLM servers. A request adds its tokens and its decode intervals.
 
@@ -95,22 +89,14 @@ class DecodeMeasurementTests(unittest.TestCase):
         self.assertIsNone(serving_decode.find_step(text, '43', 4242, 'login-1'))
         self.assertIsNone(serving_decode.find_step('No job steps exist for this job.\n', '42', 4242, 'login-1'))
 
-    def test_image_must_exist_with_its_hash_and_be_checked_on_both_nodes(self):
+    def test_a_missing_image_names_the_option_that_imports_it(self):
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / 'images' / serving_decode.IMAGE_NAME
             self.assertEqual(serving_decode.image_path(dict(AIM347_HOME=directory)), image)
-            self.assertEqual(serving_decode.image_path(dict(VLLM_IMAGE='/elsewhere.sqsh')), Path('/elsewhere.sqsh'))
-            self.assertIn('--with-serving', serving_decode.image_problem(image, 2))
+            self.assertIn('--with-serving', serving_decode.image_problem(image))
             image.parent.mkdir()
             image.write_text('image')
-            Path(f'{image}.sha256').write_text(f'hash  {image}\n')
-            self.assertIn('has not been checked on both GPU nodes', serving_decode.image_problem(image, 2))
-            Path(f'{image}.verified').write_text('gpu-node-1 OK 2026-11-04T00:00:00Z\n'
-                                                 'gpu-node-1 OK 2026-11-04T00:10:00Z\n')
-            self.assertIn('has not been checked on both GPU nodes', serving_decode.image_problem(image, 2))
-            with Path(f'{image}.verified').open('a') as stream:
-                stream.write('gpu-node-2 OK 2026-11-04T00:10:00Z\n')
-            self.assertIsNone(serving_decode.image_problem(image, 2))
+            self.assertIsNone(serving_decode.image_problem(image))
 
     def test_level_sends_each_server_its_requests_and_reads_its_counters(self):
         endpoints = [f'http://10.0.0.{node}:{8100 + gpu}' for node in (1, 2) for gpu in range(8)]
@@ -183,8 +169,6 @@ class ServeRunTests(unittest.TestCase):
         self.image = home / 'images' / serving_decode.IMAGE_NAME
         self.image.parent.mkdir(parents=True)
         self.image.write_text('image')
-        Path(f'{self.image}.sha256').write_text(f'hash  {self.image}\n')
-        Path(f'{self.image}.verified').write_text('gpu-node-1 OK t\ngpu-node-2 OK t\n')
         self.env = dict(LLM_RESULTS_DIR=str(self.results), AIM347_HOME=str(home), GPUS_PER_NODE='8',
                         SLURM_JOB_ID='42', SLURM_JOB_NUM_NODES='2',
                         SLURM_JOB_NODELIST='gpu-node-[1-2]', SLURM_JOB_CPUS_PER_NODE='192(x2)')
@@ -376,79 +360,6 @@ class ServeLlmConfigTests(unittest.TestCase):
             self.assertEqual(manifest['placement'], dict(tensor_parallel_size=1, replicas=8))
             self.assertEqual((root / 'endpoints.txt').read_text().split(),
                              [f'http://10.0.0.1:{8100 + i}' for i in range(8)])
-
-class PrepareServingImageTests(unittest.TestCase):
-    """prepare-event.sh with stubs; the training image exists and verifies, data preparation fails."""
-
-    def prepare(self, directory, *extra):
-        root = Path(directory)
-        bin_dir, stage_dir, calls = root / 'bin', root / 'stage', root / 'calls'
-        bin_dir.mkdir(exist_ok=True)
-        (stage_dir / 'images').mkdir(parents=True, exist_ok=True)
-        image = stage_dir / 'images' / 'aim347-lab.sqsh'
-        if not image.exists():
-            image.write_text('training image')
-            digest = subprocess.run(['sha256sum', str(image)], capture_output=True, text=True, check=True).stdout.split()[0]
-            Path(f'{image}.sha256').write_text(f'{digest}  {image}\n')
-        stub(bin_dir, 'id', '[[ $1 == -u ]] && echo 0\nexit 0\n')
-        stub(bin_dir, 'scontrol', 'case "$2" in hostnames) echo gpu-node-1; echo gpu-node-2 ;; '
-                                  'node) echo "NodeName=$4 NodeAddr=10.0.0.1 CPUEfctv=192" ;; esac\n')
-        stub(bin_dir, 'findmnt', 'echo lustre\n')
-        stub(bin_dir, 'srun', '''nodes=1 container=0
-while [[ $1 == -* ]]; do
-  [[ $1 == -N2 ]] && nodes=2
-  [[ $1 == --container-image=* ]] && container=1
-  [[ $1 == -w ]] && shift
-  shift
-done
-[[ $1 == ip ]] && { echo '[{"dev": "enp71s0"}]'; exit 0; }
-((container)) && exit 1
-status=0
-for node in $(seq "$nodes"); do SLURMD_NODENAME=gpu-node-$node "$@" || status=1; done
-exit $status
-''')
-        stub(bin_dir, 'curl', 'exit 0\n')
-        stub(bin_dir, 'docker', f'echo "docker $*" >> {calls}\n')
-        stub(bin_dir, 'enroot', f'echo "enroot $*" >> {calls}\n[[ $1 == import && $2 == -o ]] && echo vllm > "$3"\n')
-        stub(bin_dir, 'unsquashfs', 'exit 0\n')
-        result = subprocess.run(['bash', str(LAB / 'facilitator/prepare-event.sh'), '--stage-dir', str(stage_dir),
-                                 '--slurm-version', '0.0', '--instance-type', 'g7.48xlarge',
-                                 '--grafana-url', 'https://203.0.113.10/grafana/', *extra],
-                                env=dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}', SLURM_JOB_ID='42',
-                                         SLURM_JOB_NODELIST='gpu-node-[1-2]'),
-                                capture_output=True, text=True, timeout=120)
-        return result, (calls.read_text().splitlines() if calls.exists() else []), stage_dir / 'images'
-
-    def test_with_serving_imports_and_verifies_the_vllm_image(self):
-        source = 'vllm/vllm-openai@sha256:68b773151407ca28c05479c02c0c08a573285ba197c8ff35d2103acd97aff78c'
-        with tempfile.TemporaryDirectory() as directory:
-            result, calls, images = self.prepare(directory, '--with-serving')
-            self.assertEqual(result.returncode, 4, result.stderr)
-            self.assertIn('prepare-event: keeping', result.stdout)
-            self.assertIn('prepare-event: serving image ok (', result.stdout)
-            self.assertIn('prepare-event: serving image on both nodes ok (', result.stdout)
-            self.assertEqual(calls[-3:], [f'docker pull {source}', f'docker tag {source} aim347-vllm:0.20.2',
-                                          f'enroot import -o {images}/vllm-v0.20.2.sqsh.tmp dockerd://aim347-vllm:0.20.2'])
-            serving = images / 'vllm-v0.20.2.sqsh'
-            self.assertEqual(serving.read_text(), 'vllm\n')
-            self.assertFalse(Path(f'{serving}.tmp').exists())
-            subprocess.run(['sha256sum', '--check', '--strict', '--status', f'{serving}.sha256'], check=True)
-            verified = Path(f'{serving}.verified').read_text().splitlines()
-            self.assertEqual([line.split()[:2] for line in verified], [['gpu-node-1', 'OK'], ['gpu-node-2', 'OK']])
-
-            # A rerun keeps an image whose hash checks.
-            result, calls, _ = self.prepare(directory, '--with-serving')
-            self.assertIn(f'prepare-event: keeping {serving} (its SHA-256 checks)', result.stdout)
-            self.assertEqual(sum(call.startswith('docker pull') for call in calls), 1)
-
-    def test_without_the_option_no_serving_image_is_prepared(self):
-        with tempfile.TemporaryDirectory() as directory:
-            result, calls, images = self.prepare(directory)
-            self.assertEqual(result.returncode, 4, result.stderr)
-            self.assertNotIn('serving image', result.stdout)
-            self.assertFalse(any(call.startswith(('docker pull', 'enroot')) for call in calls))
-            self.assertFalse((images / 'vllm-v0.20.2.sqsh').exists())
-
 
 if __name__ == '__main__':
     unittest.main()

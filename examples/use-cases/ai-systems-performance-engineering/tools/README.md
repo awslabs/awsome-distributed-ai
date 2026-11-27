@@ -2,7 +2,7 @@
 
 These tools run one SmolLM2-1.7B training job with PyTorch FSDP2 on two `g7.48xlarge` nodes (16 GPUs) of an AWS PCS Slurm cluster and change it one setting at a time. Each run is measured the same way, so its result can be compared with the earlier runs. The workshop uses them in this order:
 
-1. `bash tools/check.sh` checks the nodes, GPUs, EFA devices, FSx for Lustre, the training image, the data, the monitoring stack and the Grafana sign-in.
+1. `bash tools/check.sh` shows the nodes, GPUs, EFA devices, FSx for Lustre, the training image, the data, the node counters and the Grafana sign-in.
 2. `bash tools/measure-ceilings.sh` measures each GPU's GEMM and memory-read ceilings.
 3. `bash tools/run.sh <stage>` runs one stage of the job as a Slurm batch job on both GPU nodes. Every training run goes through it.
 4. `python3 tools/profile-table.py` reads one profiled update into a fixed table.
@@ -24,9 +24,15 @@ Every shell tool first sources the environment file that provisioning writes, `$
 bash tools/check.sh
 ```
 
-Prints one line per check, `PASS` or `FAIL`, with the observed value and, on a failure, the expected one. The node checks run on both GPU nodes in a two-minute `srun` job of the partition, which waits up to 120 seconds for the nodes. They read the GPU name and memory from `nvidia-smi`, and count the entries of `/sys/class/infiniband` whose driver is `efa`. On the login node the tool checks that the stage directory is on Lustre with 300 GiB free, that the image's recorded SHA-256 matches the environment file and was checked on both nodes during provisioning, that each dataset's fingerprint matches its manifest and its pinned value, and that the model snapshot matches the config. It queries Prometheus through `https://localhost/prometheus` for the Lustre collector and the EFA counters on both GPU nodes, and Grafana through `https://localhost/grafana/api/health`. The `grafana` line prints the Grafana URL, the user `admin` and the password from `~/.aim347/grafana-admin-password`.
+Shows that the lab is prepared, one section at a time, and stops at the first command that fails:
 
-Exit status: 0 when every check passes; 1 when any fails (the last line says how many, and the first `FAIL` line is the one to fix first); 2 when the environment file is missing.
+1. A two-minute `srun` job on both GPU nodes prints each node's GPU count (`nvidia-smi -L`) and EFA device count (`/sys/class/infiniband`). Expect 8 and 2. The job waits in the queue while another job holds the nodes.
+2. `df` of the stage directory, which must be FSx for Lustre with room for the checkpoints of Module 6.
+3. `ls -l` of the training image, the three datasets' `manifest.json` and the model's `model.safetensors`.
+4. The number of nodes whose Lustre and EFA counters Prometheus on the login node has. Expect 2 and 2.
+5. Grafana's health address, then the Grafana URL, user and password.
+
+The last line is `All checks passed.` Exit status: 0; the failing command's status otherwise; 2 when the environment file is missing.
 
 ## measure-ceilings.sh
 
@@ -209,22 +215,18 @@ The tools expect a cluster built from the [AWS PCS architecture](../../../../arc
 ### facilitator/prepare-event.sh
 
 ```bash
-bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--build-jobs N] [--with-serving]
+bash facilitator/prepare-event.sh --stage-dir DIR --slurm-version VER --instance-type TYPE --grafana-url URL [--base IMAGE] [--with-serving]
 ```
 
-It accepts `--instance-type g7.48xlarge`, and `g6e.48xlarge` or `g7e.48xlarge` for test events, and refuses any other type before it starts, because the tools request 8 GPUs per node and expect two EFA devices. A `g6e.48xlarge` or `g7e.48xlarge` node has four EFA interfaces, and the test events attach two of them. It then prints `prepare-event: <step> ok (<seconds> s)` after each step and `prepare-event: ready` at the end:
+The tools request 8 GPUs per node and expect two EFA devices, as on `g7.48xlarge`. The script runs these steps and ends with `prepare-event: ready`:
 
-1. **checks**: two nodes in the allocation with equal `CPUEfctv`, `DIR` on Lustre, and the interface the second node uses to reach the first, which becomes `NCCL_SOCKET_IFNAME`.
-2. **monitoring install**: on each node, waits up to 30 minutes until node-exporter answers on `http://localhost:9100/metrics` and `docker info` succeeds. PCS installs its monitoring stack on a GPU node as a `NodeReady` action, which runs after the node already accepts jobs. On a GPU node that install restarts Docker before it starts node-exporter, and the restart would end an image build that had already started. On a timeout the script names the node and the install log, `/var/log/amazon/pcs/lifecycle/actions/nodeReady/install-monitoring.log`, and exits 2.
-3. **image**: on the first node, `docker build` of this directory's `Dockerfile` and `enroot import` into `DIR/images/aim347-lab.sqsh`, with its SHA-256 in `aim347-lab.sqsh.sha256`. No registry is used. An existing image whose hash checks is kept.
-4. **image on both nodes**: `unsquashfs -s` and the hash check on each node, recorded in `aim347-lab.sqsh.verified`.
-   With `--with-serving`, two more steps follow for [serve.sh](#servesh). **serving image**: on the first node, `docker pull` of `vllm/vllm-openai` at the digest in the script (vLLM 0.20.2, linux/amd64) and `enroot import` into `DIR/images/vllm-v0.20.2.sqsh`, with its SHA-256 in `vllm-v0.20.2.sqsh.sha256`. **serving image on both nodes**: the same check as step 4, recorded in `vllm-v0.20.2.sqsh.verified`. The image takes about 22 GB on the file system. An existing serving image whose hash checks is kept, and a run without the option leaves it as it is.
-5. **data**: in the image on the first node, `1.prepare-llm.py` writes `DIR/data/tokens-2048-1280`, `tokens-2048-160` and `tokens-1024-160` from documents of at least 4,096 tokens, keeping each document's first positions, and downloads the model to `DIR/data/model` with the first dataset. A dataset whose manifest, sizes and fingerprint verify is kept. One that fails is moved to `DIR/failed-<UTC>/` and prepared again.
-6. **data on both nodes**: each node recomputes every dataset's fingerprint and checks the model pin.
-7. **environment file**: `DIR/aim347.env`, written atomically.
-8. **ownership**: `images`, `data`, `results` and `aim347.env` are given to `ubuntu`, who runs the tools.
+1. It reads the allocation's two nodes, their CPU count, and the interface the second node uses to reach the first, which becomes `NCCL_SOCKET_IFNAME`.
+2. On each node it waits up to 30 minutes until node-exporter answers on `http://localhost:9100/metrics` and `docker info` succeeds. PCS installs its monitoring stack on a GPU node as a `NodeReady` action, which runs after the node already accepts jobs, and that install restarts Docker.
+3. **Image**: on the first node, `docker buildx build` of this directory's `Dockerfile` and `enroot import` into `DIR/images/aim347-lab.sqsh`. `--base IMAGE` builds on that image reference in place of the Dockerfile's `FROM` tag. With `--with-serving`, `docker pull` of `vllm/vllm-openai` at the digest in the script (vLLM 0.20.2, linux/amd64) and `enroot import` into `DIR/images/vllm-v0.20.2.sqsh` for [serve.sh](#servesh).
+4. **Data**: in the image on the first node, `1.prepare-llm.py` writes `DIR/data/tokens-2048-1280`, `tokens-2048-160` and `tokens-1024-160` from documents of at least 4,096 tokens, keeping each document's first positions, and downloads the model to `DIR/data/model` with the first dataset.
+5. It writes `DIR/aim347.env` and gives `images`, `data`, `results` and that file to `ubuntu`, who runs the tools.
 
-Steps 3 and 5 request all of the node's CPUs, because a step task otherwise gets one. A rerun after a failure keeps the parts that verify. Exit status: 0 ready; 2 usage or a precondition, including a monitoring install that did not finish; 3 the image build, import or hash; 4 the data preparation; 5 a verification on either node.
+A rerun keeps an image file that exists, a dataset that has its `manifest.json` and a model that has its `aim347-pin.json`, and makes the rest. To rebuild one, remove it first.
 
 ### facilitator/install-node-collectors.sh
 

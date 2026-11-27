@@ -53,17 +53,11 @@ def image_path(env):
     return Path(env.get('VLLM_IMAGE') or Path(home) / 'images' / IMAGE_NAME)
 
 
-def image_problem(image, nodes):
-    """None when provisioning imported the image and checked it on every node, else what is missing."""
-    if not image.is_file() or not Path(f'{image}.sha256').is_file():
+def image_problem(image):
+    """None when the serving image is on the cluster, else what is missing."""
+    if not image.is_file():
         return (f'AIM347: the serving image is not on this cluster: {image}\n'
                 'Provisioning imports it only when facilitator/prepare-event.sh runs with --with-serving.')
-    verified = Path(f'{image}.verified')
-    lines = verified.read_text().splitlines() if verified.is_file() else []
-    hosts = {line.split()[0] for line in lines if line.split()[1:2] == ['OK']}
-    if len(hosts) < nodes:
-        return (f'AIM347: {image} has not been checked on both GPU nodes.\n'
-                'Run facilitator/prepare-event.sh --with-serving again.')
     return None
 
 
@@ -288,7 +282,7 @@ def run(env=None, *, popen=subprocess.Popen, runner=subprocess.run, health=answe
     nodes, gpus = int(env.get('SLURM_JOB_NUM_NODES', 2)), int(env.get('GPUS_PER_NODE', 8))
     servers = nodes * gpus
     image = image_path(env)
-    problem = image_problem(image, nodes)
+    problem = image_problem(image)
     if problem:
         print(problem, file=sys.stderr)
         return 2

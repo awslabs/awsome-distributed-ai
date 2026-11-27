@@ -6,52 +6,34 @@ training image, and in the CPU tests. The shell tools stay thin and call the
 subcommands at the end of this file.
 """
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shlex
 import socket
-import ssl
 import statistics
 import subprocess
 import sys
 import time
-import urllib.parse
-import urllib.request
 
 from llm_metrics import training_goodput, update_work
 
 LAB = Path(__file__).resolve().parents[1]
-STATE = Path.home() / '.aim347'
 
 # SmolLM2-1.7B (configs/smol-*.json): parameters, decoder layers, hidden size.
 MODEL_PARAMETERS = 1_711_376_384
 MODEL_LAYERS = 24
 MODEL_HIDDEN = 2048
 
-# Prepared datasets, in preparation order. The first preparation also
-# downloads the model. A fingerprint is the manifest sha256 over tokens.bin
-# and lengths.bin. tokens-2048-1280 is pinned after its first preparation.
+# Prepared datasets (facilitator/prepare-event.sh writes them).
 DATASETS = {
     'tokens-2048-1280': dict(config='configs/smol-2048-40.json', records=1280),
     'tokens-2048-160': dict(config='configs/smol-2048.json', records=160),
     'tokens-1024-160': dict(config='configs/smol-1024.json', records=160),
 }
-EXPECTED_FINGERPRINTS = {
-    'tokens-2048-1280': None,
-    'tokens-2048-160': 'a8d0d10c6fa35c3abf087e4c97abde04ab0014b03c88b9f4301a26ea590f7736',
-    'tokens-1024-160': 'e15aa0d7a1fce39159494ab0010d92c8f537c12a56f78810cc64d9a019a3c520',
-}
-MINIMUM_DOCUMENT_TOKENS = 4096
-PROVENANCE_KEYS = ('model_id', 'tokenizer_revision', 'dataset_id', 'dataset_revision',
-                   'dataset_subset', 'dataset_split')
-# EFA devices attached per node: g6e.48xlarge and g7e.48xlarge have four, and the test events attach two.
-EFA_DEVICES = {'g7.48xlarge': 2, 'g6e.48xlarge': 2, 'g7e.48xlarge': 2}
 # OFI_NCCL_PROTOCOL of the EFA path (2.run-llm.sh, lib/nccl-protocols-rank.sh); RDMA otherwise.
 OFI_PROTOCOLS = {'g6e.48xlarge': 'SENDRECV'}
-FSX_FREE_BYTES = 300 * 2**30
 
 EFA_COUNTERS = ('tx_bytes', 'rx_bytes', 'rdma_read_bytes', 'rdma_write_bytes', 'rdma_write_recv_bytes')
 NETWORK = {'socket': 'Socket', 'efa': 'AWS Libfabric'}
@@ -944,19 +926,17 @@ def write_atomic(path, text, mode=0o644):
 # ---------------------------------------------------------------- provisioning
 
 def env_file_text(*, stage_dir, companion, slurm_version, cpus_per_node, instance_type, nic,
-                  image_sha256, grafana_url, password_file):
+                  grafana_url, password_file):
     """aim347.env: export lines, values quoted; the PATH line expands $PATH when sourced."""
-    if not re.fullmatch(r'\d+\.\d+', slurm_version):
-        raise UsageError(f'invalid Slurm version {slurm_version!r}')
     home = str(stage_dir)
     values = [('AIM347_HOME', home), ('AIM347_COMPANION', str(companion)),
               ('PATH', None), ('PARTITION', 'gpu'), ('GPUS_PER_NODE', 8),
               ('AIM347_CPUS_PER_NODE', cpus_per_node), ('AIM347_INSTANCE_TYPE', instance_type),
               ('NCCL_SOCKET_IFNAME', f'={nic}'), ('LAB_IMAGE', f'{home}/images/aim347-lab.sqsh'),
-              ('LAB_IMAGE_SHA256', image_sha256), ('LLM_DATA_DIR', f'{home}/data'),
+              ('LLM_DATA_DIR', f'{home}/data'),
               ('LLM_RESULTS_DIR', f'{home}/results'), ('LLM_CONTAINER_NAME', 'aim347-lab'),
               ('AIM347_ALLOCATION_LABEL', f'pcs-{instance_type}-2nodes-16gpu'), ('AIM347_GRAFANA_URL', grafana_url),
-              ('AIM347_GRAFANA_PASSWORD_FILE', str(password_file)), ('AIM347_SKIP_LEGACY_ENV', 1)]
+              ('AIM347_GRAFANA_PASSWORD_FILE', str(password_file))]
     lines = []
     for key, value in values:
         if key == 'PATH':
@@ -966,173 +946,10 @@ def env_file_text(*, stage_dir, companion, slurm_version, cpus_per_node, instanc
     return ''.join(lines)
 
 
-def dataset_fingerprint(directory):
-    digest = hashlib.sha256()
-    for name in ('tokens.bin', 'lengths.bin'):
-        with (Path(directory) / name).open('rb') as stream:
-            for block in iter(lambda: stream.read(8 * 1024 * 1024), b''):
-                digest.update(block)
-    return digest.hexdigest()
-
-
-def verify_dataset(data_dir, name, lab=LAB):
-    """(ok, detail, manifest) for one prepared dataset against its config and pin."""
-    directory = Path(data_dir) / name
-    manifest = read_json(directory / 'manifest.json')
-    if not manifest:
-        return False, f'no manifest in {directory}', None
-    config = config_values(DATASETS[name]['config'], lab)
-    expected = dict(records=DATASETS[name]['records'], sequence_length=config['sequence_length'],
-                    minimum_document_tokens=MINIMUM_DOCUMENT_TOKENS, **{k: config[k] for k in PROVENANCE_KEYS})
-    for key, value in expected.items():
-        if manifest.get(key) != value:
-            return False, f'manifest {key} is {manifest.get(key)!r}, expected {value!r}', manifest
-    rows, positions = manifest['records'], manifest['sequence_length']
-    sizes = {'tokens.bin': rows * positions * 4, 'lengths.bin': rows * 4}
-    for file, size in sizes.items():
-        path = directory / file
-        if not path.is_file() or path.stat().st_size != size:
-            return False, f'{file} is missing or not {size} bytes', manifest
-    fingerprint = dataset_fingerprint(directory)
-    if fingerprint != manifest['sha256']:
-        return False, f'fingerprint {fingerprint[:8]} differs from its manifest ({manifest["sha256"][:8]})', manifest
-    pinned = EXPECTED_FINGERPRINTS[name]
-    if pinned and fingerprint != pinned:
-        return False, f'fingerprint {fingerprint[:8]} (expected {pinned[:8]})', manifest
-    return True, f'fingerprint {fingerprint[:8]} (expected {(pinned or manifest["sha256"])[:8]})', manifest
-
-
-def verify_model(data_dir, lab=LAB):
-    config = config_values('configs/smol-2048.json', lab)
-    expected = {key: config[key] for key in ('model_id', 'model_revision')}
-    pin = read_json(Path(data_dir) / 'model' / 'aim347-pin.json')
-    if pin != expected or not (Path(data_dir) / 'model' / 'config.json').is_file():
-        return False, f'model pin {pin!r} does not match {expected!r}'
-    return True, f"{expected['model_id']} at {expected['model_revision'][:8]}"
-
-
 # ---------------------------------------------------------------- node readers
 
 def node_name():
     return os.environ.get('SLURMD_NODENAME') or socket.gethostname()
-
-
-def efa_devices(root='/sys/class/infiniband'):
-    root = Path(root)
-    return [device.name for device in sorted(root.iterdir()) if root.is_dir()
-            and os.path.basename(os.path.realpath(device / 'device' / 'driver')) == 'efa']
-
-
-def node_probe():
-    report = dict(host=node_name(), gpus=[], efa=efa_devices(), error=None)
-    try:
-        output = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader,nounits'],
-                                capture_output=True, text=True, timeout=60, check=True).stdout
-        report['gpus'] = [[part.strip() for part in line.rsplit(',', 1)] for line in output.splitlines() if line.strip()]
-    except (OSError, subprocess.SubprocessError) as error:
-        report['error'] = f'nvidia-smi: {error}'
-    return report
-
-
-def http_text(url, timeout=10):
-    """GET a URL on the login node; the monitoring stack uses a self-signed certificate."""
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    with urllib.request.urlopen(url, timeout=timeout, context=context) as response:
-        return response.status, response.read().decode()
-
-
-def prometheus_count(base, query, fetch=http_text):
-    status, body = fetch(f'{base}/api/v1/query?' + urllib.parse.urlencode({'query': query}))
-    result = json.loads(body)['data']['result']
-    return int(float(result[0]['value'][1])) if result else 0
-
-
-# ---------------------------------------------------------------- check.sh
-
-def check_lines(env, sinfo_text, node_reports, fetch=http_text, lab=LAB):
-    """(lines, failures) of tools/check.sh, from the gathered Slurm and node outputs."""
-    rows = []
-
-    def add(name, ok, detail):
-        rows.append((name, ok, detail))
-
-    add('environment', True, env.get('AIM347_ENV', '/fsx/aim347/participant/aim347.env'))
-    gpus_per_node = int(env.get('GPUS_PER_NODE', 8))
-    nodes = [line.split() for line in sinfo_text.splitlines() if len(line.split()) == 2]
-    names = sorted({name for name, _ in nodes})
-    states = sorted({state for _, state in nodes})
-    usable = bool(states) and all(state in ('idle', 'alloc', 'mix', 'comp') for state in states)
-    add('partition', len(names) == 2 and usable,
-        f"{env.get('PARTITION', 'gpu')}: {len(names)} nodes ({', '.join(names)}), {', '.join(states) or 'no state'}"
-        + ('' if len(names) == 2 and usable else ' (expected 2 nodes in idle, alloc or mix)'))
-    reports = {report['host']: report for report in node_reports}
-    if len(reports) != 2:
-        add('gpus', False, f'{len(reports)} nodes answered the node check (expected 2)')
-    expected_efa = EFA_DEVICES.get(env.get('AIM347_INSTANCE_TYPE'), 1)
-    for host in sorted(reports):
-        report = reports[host]
-        kinds = sorted({tuple(gpu) for gpu in report['gpus']})
-        text = f"{host}: {len(report['gpus'])} x " + ('; '.join(f'{name}, {memory} MiB' for name, memory in kinds)
-                                                     or 'no GPU') + (' each' if len(kinds) == 1 else '')
-        ok = len(report['gpus']) == gpus_per_node and len(kinds) == 1
-        add('gpus', ok, text + ('' if ok else f" (expected {gpus_per_node}){' ' + report['error'] if report.get('error') else ''}"))
-    for host in sorted(reports):
-        devices = reports[host]['efa']
-        ok = len(devices) >= expected_efa
-        add('efa', ok, f"{host}: {len(devices)} EFA devices ({', '.join(devices)})"
-            + ('' if ok else f' (expected {expected_efa})'))
-    home = Path(env.get('AIM347_HOME', '/fsx/aim347/participant'))
-    try:
-        fstype = subprocess.run(['findmnt', '-T', str(home), '-n', '-o', 'FSTYPE,TARGET'], capture_output=True,
-                                text=True, timeout=10).stdout.split()
-        stats = os.statvfs(home)
-        size, free = stats.f_blocks * stats.f_frsize, stats.f_bavail * stats.f_frsize
-        ok = fstype[:1] == ['lustre'] and free >= FSX_FREE_BYTES
-        add('fsx', ok, f"{fstype[1] if len(fstype) > 1 else home}: {fstype[0] if fstype else 'unknown'}, "
-                       f'{size / 2**40:.1f} TiB, {free / 2**40:.1f} TiB free (needs 300 GiB)')
-    except (OSError, subprocess.SubprocessError) as error:
-        add('fsx', False, f'{home}: {error}')
-    image = Path(env.get('LAB_IMAGE', home / 'images/aim347-lab.sqsh'))
-    recorded = (Path(str(image) + '.sha256').read_text().split() or [''])[0] if Path(str(image) + '.sha256').is_file() else ''
-    verified = {line.split()[0] for line in Path(str(image) + '.verified').read_text().splitlines()
-                if len(line.split()) >= 2 and line.split()[1] == 'OK'} if Path(str(image) + '.verified').is_file() else set()
-    ok = image.is_file() and bool(recorded) and recorded == env.get('LAB_IMAGE_SHA256') and len(verified) >= 2
-    add('image', ok, f'{image.name}, SHA-256 {recorded[:12] or "missing"} '
-                     + ('checked on both nodes at preparation' if ok else
-                        f'(environment {env.get("LAB_IMAGE_SHA256", "")[:12] or "missing"}, verified on '
-                        f'{len(verified)} nodes, expected 2)'))
-    data = Path(env.get('LLM_DATA_DIR', home / 'data'))
-    for name in ('tokens-2048-160', 'tokens-1024-160', 'tokens-2048-1280'):
-        ok, detail, manifest = verify_dataset(data, name, lab)
-        shape = (f"{manifest['records']:,} documents x {manifest['sequence_length']:,} positions, "
-                 if manifest else '')
-        add('data', ok, f'{name}: {shape}{detail}')
-    ok, detail = verify_model(data, lab)
-    add('model', ok, detail)
-    base = env.get('AIM347_PROMETHEUS_URL', 'https://localhost/prometheus')
-    try:
-        lustre = prometheus_count(base, 'count(aim347_lustre_collection_success == 1)', fetch)
-        efa = prometheus_count(base, 'count(count by (instance_id) (node_amazonefa_tx_bytes))', fetch)
-        ok = lustre == 2 and efa == 2
-        add('monitoring', ok, 'Prometheus scrapes both GPU nodes; EFA counters and the Lustre collector present' if ok
-            else f'Prometheus sees the Lustre collector on {lustre} nodes and EFA counters on {efa} nodes (expected 2 and 2)')
-    except (OSError, ValueError, KeyError, IndexError) as error:
-        add('monitoring', False, f'{base}: {error}')
-    url = env.get('AIM347_GRAFANA_URL', '')
-    try:
-        status, body = fetch(env.get('AIM347_GRAFANA_HEALTH_URL', 'https://localhost/grafana/api/health'))
-        password = Path(env.get('AIM347_GRAFANA_PASSWORD_FILE', STATE / 'grafana-admin-password')).read_text().strip()
-        ok = status == 200 and json.loads(body).get('database') == 'ok' and bool(password)
-        add('grafana', ok, f'{url}  user admin  password {password}' if ok else f'{url}: health {status} {body[:80]}')
-    except (OSError, ValueError) as error:
-        add('grafana', False, f'{url}: {error}')
-    lines = ['AIM347 check'] + [f"  {name:<13}{'PASS' if ok else 'FAIL'}  {detail}" for name, ok, detail in rows]
-    failures = sum(not ok for _, ok, _ in rows)
-    lines.append('All checks passed.' if not failures else
-                 f'{failures} checks failed. Fix the first FAIL line before continuing.')
-    return lines, failures
 
 
 # ---------------------------------------------------------------- the batch job of run.sh
@@ -1354,20 +1171,12 @@ def main(argv=None):
     run.add_argument('--list', action='store_true', help='check the names and print them, without running')
     commands.add_parser('nccl-protocols', help='tools/nccl-protocols.sh')
     commands.add_parser('efa-read', help='on a GPU node: EFA counters as one JSON line')
-    commands.add_parser('node-probe', help='on a GPU node: GPUs and EFA devices as one JSON line')
-    report = commands.add_parser('check-report', help='tools/check.sh output')
-    report.add_argument('--sinfo', type=Path, required=True)
-    report.add_argument('--nodes', type=Path, required=True)
     ceilings = commands.add_parser('ceilings')
     ceilings.add_argument('--dir', type=Path, required=True)
     ceilings.add_argument('--gpus', type=int, required=True)
-    verify = commands.add_parser('verify-data')
-    verify.add_argument('--data', type=Path, required=True)
-    verify.add_argument('--dataset', action='append', choices=list(DATASETS))
-    verify.add_argument('--model', action='store_true')
     env = commands.add_parser('write-env')
     for option in ('stage-dir', 'companion', 'slurm-version', 'cpus-per-node', 'instance-type', 'nic',
-                   'image-sha256', 'grafana-url', 'password-file'):
+                   'grafana-url', 'password-file'):
         env.add_argument('--' + option, required=True)
     args = parser.parse_args(argv)
     try:
@@ -1392,14 +1201,6 @@ def main(argv=None):
                 print(f'efa-read {node_name()}: {error}', file=sys.stderr)
             print(json.dumps(dict(host=node_name(), devices=devices, errors=errors)))
             return 0
-        if args.command == 'node-probe':
-            print(json.dumps(node_probe()))
-            return 0
-        if args.command == 'check-report':
-            reports = [json.loads(line) for line in args.nodes.read_text().splitlines() if line.startswith('{')]
-            lines, failures = check_lines(dict(os.environ), args.sinfo.read_text(), reports)
-            print('\n'.join(lines))
-            return 1 if failures else 0
         if args.command == 'ceilings':
             result = aggregate_ceilings(args.dir)
             if result['gpu_count'] != args.gpus:
@@ -1408,22 +1209,11 @@ def main(argv=None):
             write_atomic(args.dir / 'ceilings.json', json.dumps(result, indent=2) + '\n')
             print('\n'.join(ceilings_lines(result)))
             return 0
-        if args.command == 'verify-data':
-            failed = False
-            for name in args.dataset or []:
-                ok, detail, _ = verify_dataset(args.data, name)
-                print(f"{node_name()} {name} {'OK' if ok else 'FAIL'} {detail}")
-                failed |= not ok
-            if args.model:
-                ok, detail = verify_model(args.data)
-                print(f"{node_name()} model {'OK' if ok else 'FAIL'} {detail}")
-                failed |= not ok
-            return 1 if failed else 0
         if args.command == 'write-env':
             write_atomic(Path(args.stage_dir) / 'aim347.env', env_file_text(
                 stage_dir=args.stage_dir, companion=args.companion, slurm_version=args.slurm_version,
                 cpus_per_node=int(args.cpus_per_node), instance_type=args.instance_type, nic=args.nic,
-                image_sha256=args.image_sha256, grafana_url=args.grafana_url, password_file=args.password_file))
+                grafana_url=args.grafana_url, password_file=args.password_file))
             return 0
     except UsageError as error:
         print(error, file=sys.stderr)
