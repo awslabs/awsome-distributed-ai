@@ -6,10 +6,9 @@ import json
 import math
 from pathlib import Path
 from deployment import kubectl, owned_namespace, read_config
-import report
-from scoring import (DEFAULT_TPOT_AXIS_MS, DEFAULT_TTFT_AXIS_MS, ORIGINAL_SUMMARY_KEYS, PAIR_SETTINGS, TPOT_METRICS, TTFT_METRICS, UNAVAILABLE,
+from scoring import (ORIGINAL_SUMMARY_KEYS, PAIR_SETTINGS, TPOT_METRICS, TTFT_METRICS, UNAVAILABLE,
                      availability_by_arch, check_reproduces, gap_data_available, highest_qualifying, load_file,
-                     promise_grid, score, score_factory_for, validate_grid_axis)
+                     score, score_factory_for)
 
 GROUP_KEY = ("architecture", "instance_type", "region", "evidence_scope", "model_revision", "shape_sha256", "gpu_count",
              "slo_ttft_ms", "slo_tpot_ms", "attainment_target_fraction")
@@ -50,24 +49,6 @@ def summary_row(m, a):
     return row
 
 
-def evidence_row(m, row, stack_available):
-    """One report.html evidence row: a file's statistics and its verdict under each rule; a rule the stack
-    cannot be judged under shows UNAVAILABLE, as the verdict does."""
-    ev = {"architecture": m["architecture"], "offered": m["offered"], "seed": m["seed"], "source": m["source"],
-          "planned_rates": m["rates"], "max_client_lag_bound_ms": m["max_client_lag_ms"],
-          **{k: row[k] for k in ("planned_calls", "completed_calls", "instance_type", "gpu_count", "measurement_including_drain_s",
-                                 "p90_ttft_ms_success_only", "p95_ttft_ms_success_only", "p99_ttft_ms_success_only",
-                                 "p90_tpot_ms_success_only", "itl_ms_p99", "longest_gap_ms_p90", "client_valid",
-                                 "max_client_launch_lag_ms", "unreachable_calls")}}
-    ev.update({"mean_pass": row["meets_joint_slo"], "mean_attainment": row["slo_attainment_fraction"], "mean_goodput": row["useful_calls_per_s_per_gpu"]})
-    for d, prefix in RULE_PREFIX.items():
-        judged = stack_available[d]
-        ev.update({f"{d}_pass": row[f"{prefix}_meets_joint_slo"] if judged else UNAVAILABLE,
-                   f"{d}_attainment": row[f"{prefix}_slo_attainment_fraction"] if judged else UNAVAILABLE,
-                   f"{d}_goodput": row[f"{prefix}_useful_calls_per_s_per_gpu"] if judged else UNAVAILABLE})
-    return ev
-
-
 def pair_marks(files):
     """Settings, planned rates and seeds that differ between the files of a unified/disaggregated pair."""
     marks = []
@@ -97,9 +78,6 @@ def main():
     p.add_argument("--runs", nargs="+", required=True, help="Directories containing rate-measured.json files")
     p.add_argument("--output", required=True)
     p.add_argument("--config", help="Also collect live resources and engine logs from the owned namespace")
-    p.add_argument("--ttft-ms", type=float, nargs="+", default=list(DEFAULT_TTFT_AXIS_MS), help="report.html promise-map TTFT columns, ms")
-    p.add_argument("--tpot-ms", type=float, nargs="+", default=list(DEFAULT_TPOT_AXIS_MS), help="report.html promise-map TPOT rows, ms: per output token under mean and itl-p99, one raw gap under worst-itl")
-    p.add_argument("--no-report", action="store_true", help="Skip report.html; summary.csv and qualified-rates.json are unaffected")
     p.add_argument("--ttft-slo-ms", type=float, help="TTFT bound, ms. Default: the one recorded with each file")
     p.add_argument("--tpot-slo-ms", type=float, help="TPOT bound, ms: per output token under mean and itl-p99, one raw gap under worst-itl. Default: recorded")
     p.add_argument("--attainment-fraction", type=float, help="Share of planned calls that must be good, e.g. 0.9. Default: recorded")
@@ -110,11 +88,6 @@ def main():
             p.error(f"{flag} needs a finite positive bound")
     if a.attainment_fraction is not None and not (math.isfinite(a.attainment_fraction) and 0 < a.attainment_fraction <= 1):
         p.error("--attainment-fraction must be in (0, 1]; use 0.9 for 90 percent")
-    for name in ("ttft_ms", "tpot_ms"):
-        try:
-            setattr(a, name, list(validate_grid_axis(getattr(a, name))))
-        except ValueError as exc:
-            p.error(f"--{name.replace('_', '-')} {exc}")
     out = Path(a.output)
     out.mkdir(parents=True, exist_ok=True)
     measured, left_out = [], {}
@@ -128,10 +101,6 @@ def main():
                 continue
             measured.append(m)
     if not measured:
-        # Nothing of this run to draw, so an earlier report.html must not look like its result.
-        if (out / "report.html").exists():
-            (out / "report.html").unlink()
-            print(f"Removed the earlier {out / 'report.html'}: this run drew no promise map")
         raise SystemExit(("No measured file could be read; no summary was fabricated" if left_out else "No measured files found; no summary was fabricated")
                          + "".join(f"\n{k}: {v}" for k, v in sorted(left_out.items())))
     rows = [summary_row(m, a) for m in measured]
@@ -166,7 +135,7 @@ def main():
                                       for d, v in by_rule.items()}})
     (out / "qualified-rates.json").write_text(json.dumps(qualified, indent=2))
 
-    # report.html pairs the unified and disaggregated groups that share the rest of the key.
+    # A comparison needs the unified and disaggregated groups that share the rest of the key.
     pairs = {}
     for key in groups:
         pairs.setdefault(key[1:], {})[key[0]] = key
@@ -180,45 +149,16 @@ def main():
             notices.append(f"{m['source']}: {n} of {len(m['requests'])} calls could not connect; if they cluster or are many, rerun the ramp from this rate into the same --output")
         if not gap_data_available(m["requests"]):
             notices.append(f"{m['source']} has no per-chunk timing, so itl-p99 and worst-itl cannot judge its stack; measure that rate again to judge them")
-    sections = []
     for rest, archs in sorted(pairs.items(), key=lambda kv: str(kv[0])):
         shape = groups[next(iter(archs.values()))][0][0]["shape"]
         if set(archs) != {"unified", "disaggregated"}:
             notices.append(f"{shape} ({', '.join(sorted(archs))}, {rest[5]} GPUs) has no unified and disaggregated pair with the same hardware, workload, "
-                           "GPU count and objective, so it has no promise map; measure the other stack with the same settings to compare")
+                           "GPU count and objective; measure the other stack with the same settings to compare")
             continue
-        files_by_arch = {arch: [m for m, _r in groups[k]] for arch, k in archs.items()}
-        members = [x for k in archs.values() for x in groups[k]]
-        availability = availability_by_arch(files_by_arch)
-        marks = pair_marks([m for m, _r in members])
+        marks = pair_marks([m for k in archs.values() for m, _r in groups[k]])
         notices += [f"{shape}: {mark}; measure again with them aligned to compare like with like" for mark in marks]
-        sections.append({
-            "shape": shape, "archs": sorted(archs), "objective": (rest[6], rest[7]), "attainment": rest[8], "ttft_metric": ttft_metric,
-            "objective_given": [n for n, flag in (("TTFT bound", "ttft_slo_ms"), ("TPOT bound", "tpot_slo_ms"), ("attainment target", "attainment_fraction"), ("TTFT judging mode", "ttft_metric")) if flag in changed],
-            "qualified": {(arch, d): by_group[k][d] for arch, k in archs.items() for d in TPOT_METRICS},
-            "grid": None if a.no_report else promise_grid(files_by_arch, a.ttft_ms, a.tpot_ms, rest[8], lambda d: score_factory_for(d, ttft_metric), availability),
-            "ttft_axis": a.ttft_ms, "tpot_axis": a.tpot_ms, "marks": marks,
-            "evidence": [evidence_row(m, r, {d: availability[(m["architecture"], d)] for d in TPOT_METRICS}) for m, r in members],
-        })
-    report_path = out / "report.html"
-    report_error = None
-    if a.no_report or not sections:
-        if report_path.exists():
-            report_path.unlink()
-            print(f"Removed the earlier {report_path}: this run drew no promise map")
-    else:
-        try:
-            report_path.write_text(report.render_sections(sections, notices))
-            print(f"Wrote {report_path.resolve()}")
-        except Exception as exc:
-            if report_path.exists():
-                report_path.unlink()
-                print(f"Removed the earlier {report_path}: this run drew no promise map")
-            report_error = f"report.html rendering failed ({type(exc).__name__}: {exc})"
-            print(f"{report_error}; continuing without it")
-    if not report_path.exists():
-        for notice in notices:
-            print(notice)
+    for notice in notices:
+        print(notice)
     if a.config:
         c = read_config(a.config)
         owned_namespace(c)
@@ -238,13 +178,9 @@ def main():
                         code = f"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:{port}/{endpoint}').read().decode())"
                         suffix = f"{port}-{endpoint}" if c.get('placement') == 'packed' else endpoint
                         (out / f"{name}-{suffix}.txt").write_text(kubectl(c, "exec", name, "-c", "engine", "--", "python3", "-c", code, capture_output=True).stdout)
-    print(json.dumps({"summary_csv": str(out / "summary.csv"), "measured_rate_rows": len(rows), "qualified_rates": str(out / "qualified-rates.json"),
-                      "report_html": str(report_path) if report_path.exists() else None, "left_out": left_out}))
-    reasons = [f"left out {len(left_out)} file(s) that could not be read as ramp files:\n" + "\n".join(f"{k}: {v}" for k, v in sorted(left_out.items()))] if left_out else []
-    if report_error:
-        reasons.append(report_error)
-    if reasons:
-        raise SystemExit("\n\n".join(reasons))
+    print(json.dumps({"summary_csv": str(out / "summary.csv"), "measured_rate_rows": len(rows), "qualified_rates": str(out / "qualified-rates.json"), "left_out": left_out}))
+    if left_out:
+        raise SystemExit(f"left out {len(left_out)} file(s) that could not be read as ramp files:\n" + "\n".join(f"{k}: {v}" for k, v in sorted(left_out.items())))
 
 if __name__ == "__main__":
     main()

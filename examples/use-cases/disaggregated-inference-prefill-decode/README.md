@@ -155,12 +155,12 @@ check_completed results/disaggregated-b/0.5-measured.json results/disaggregated-
 kill $PF
 wait $PF 2> /dev/null || true
 python3 5.collect.py --runs results/unified-b results/disaggregated-b --output results/e2e-collected
-ls -l results/e2e-collected/report.html
+ls -l results/e2e-collected/summary.csv
 python3 deployment.py cleanup --config config.json
 LAB
 ```
 
-A successful run ends with the size of `results/e2e-collected/report.html` and a line reporting that the `LAB_NAMESPACE` namespace was deleted. The measurement here is short and only shows that each step works; use "Sequential comparison" for results you intend to compare.
+A successful run ends with the size of `results/e2e-collected/summary.csv` and a line reporting that the `LAB_NAMESPACE` namespace was deleted. The measurement here is short and only shows that each step works; use "Sequential comparison" for results you intend to compare.
 
 ## Paired endpoints on separate allocations
 
@@ -330,7 +330,7 @@ Once Round 2 below has written `results/disaggregated-b`, collect all four direc
 python3 5.collect.py --runs results/unified-b results/unified-b-seed1001 results/disaggregated-b results/disaggregated-b-seed1001 --output results/comparison-2-seeds
 ```
 
-A rerun into the same `--output` replaces the files of the rates it completes; a heavier rate it does not reach keeps its earlier file, so move that file away first if it should not count. When calls of a rate could not connect (`report.html` and the `unreachable_calls` column of `summary.csv` count them), rerun the ramp from that rate into the same `--output` this way.
+A rerun into the same `--output` replaces the files of the rates it completes; a heavier rate it does not reach keeps its earlier file, so move that file away first if it should not count. When calls of a rate could not connect (`5.collect.py` prints them, and the `unreachable_calls` column of `summary.csv` counts them), rerun the ramp from that rate into the same `--output` this way.
 
 For Round 1, stop the port-forward command, deploy disaggregation, wait for each engine and router, then restart port forwarding:
 
@@ -423,7 +423,7 @@ Restart port forwarding after the router changes. Repeat the shape B ramp with `
 
 ## Read the measurements and locate the crossover
 
-Read `report.html` first; `summary.csv` and `qualified-rates.json` hold the results per file and per group (see "5.collect.py's output").
+`summary.csv` and `qualified-rates.json` hold the results per file and per group (see "5.collect.py's output").
 
 `summary.csv` records hardware, evidence scope, offered task rate, actual call rate, successful-call throughput, useful-call throughput, GPU-normalized useful throughput, joint SLO attainment, and successful-request latency percentiles. Useful throughput is calls satisfying both latency bounds divided by the full interval including drain. Failed requests, truncated streams, timeouts, and skipped dependent calls contribute no useful work and stay in the attainment denominator. Successful-request percentiles alone can hide failures. Under `--ttft-metric p95` or `p99`, every completed call passes the TTFT side, and in the `itl_p99_` columns every call that passes the TTFT side passes the TPOT side; in both cases the file passes only when the file's percentile is within its bound. Average TPOT comes from server token counts and client stream timing; chunks containing several tokens limit per-token resolution.
 
@@ -433,7 +433,7 @@ For Round 3, edit one factor at a time in a copy of the shape JSON and regenerat
 
 ## How the results are judged
 
-`5.collect.py` judges every measured file under three TPOT rules, `mean`, `itl-p99` and `worst-itl`, and takes each stack's qualifying rate and goodput under each rule. The definitions are in `report.html` (select an underlined term) and in the docstrings of `scoring.summarize` and `scoring.highest_qualifying`.
+`5.collect.py` judges every measured file under three TPOT rules, `mean`, `itl-p99` and `worst-itl`, and takes each stack's qualifying rate and goodput under each rule. The definitions are in the docstrings of `scoring.summarize` and `scoring.highest_qualifying`.
 
 ## Score against another objective
 
@@ -444,19 +444,18 @@ python3 5.collect.py --runs results/unified-b results/disaggregated-b --tpot-slo
 python3 5.collect.py --runs results/unified-b results/disaggregated-b --ttft-metric p95 --output results/ttft-p95
 ```
 
-`summary.csv`, `qualified-rates.json` and `report.html` are then computed at the given objective, and `summary.csv` and `report.html` say so (`objective_given_on_command_line`); the `*-measured.json` files keep the summary recorded when they were measured.
+`summary.csv` and `qualified-rates.json` are then computed at the given objective, and `summary.csv` says so (`objective_given_on_command_line`); the `*-measured.json` files keep the summary recorded when they were measured.
 
 ## 5.collect.py's output
 
-`5.collect.py` reads the `*-measured.json` files under each `--runs` directory and writes `summary.csv` and `qualified-rates.json` into `--output`, plus `report.html` with a promise map for each unified and disaggregated group that share instance type, Region, evidence scope, model revision, traffic shape, GPU count and objective, unless `--no-report` is given. It sends no traffic.
+`5.collect.py` reads the `*-measured.json` files under each `--runs` directory and writes `summary.csv` and `qualified-rates.json` into `--output`. It prints one notice for each file left out, file without per-chunk timing, rate with calls that could not connect, and setting, planned rate or seed that differs between the unified and disaggregated files of the same instance type, Region, evidence scope, model revision, traffic shape, GPU count and objective. It sends no traffic.
 
 | File | One row or entry is | What it holds | Read it to |
 |---|---|---|---|
 | `summary.csv` | One measured file (one stack, seed and rate). | The original columns at the objective in use, judged by the mean rule; `useful_calls_per_s_per_gpu` is the file's figure whether or not the rate qualified. Then statistics for the gap rules and the TTFT percentiles, `unreachable_calls` (calls that could not connect, counted as failed calls), `seed`, `objective_given_on_command_line`, the `itl_p99_` and `worst_itl_` columns with each gap rule's `meets_joint_slo`, `slo_attainment_fraction` and `useful_calls_per_s_per_gpu` for that file, and `gap_data_available`. | See why one seed at one rate passed or failed. |
 | `qualified-rates.json` | One group: one stack on one hardware, workload, GPU count and objective. | The original `highest_tested_offered_tasks_per_s_meeting_slo` and `max_observed_useful_calls_per_s_per_gpu` (both read from the files of the group that met the objective under the mean rule, so a rate that broke the objective cannot supply the peak; both `null` when no rate qualifies), then `by_rule` with each rule's highest rate met by some file and `useful_calls_per_s_per_gpu_at_that_rate`, the largest goodput among the files that met the objective at that rate (both `null` when no rate qualifies). A gap rule's entry is `scoring.UNAVAILABLE` when any file of the group has no per-chunk timing. | Get one number per stack and rule. |
-| `report.html` | One page, one section per unified and disaggregated pair. | The answer, what was measured, the verdict table, one promise map per rule and the evidence table; an underlined term opens its definition. Notices at the top list files left out, files without per-chunk timing, calls that could not connect, and settings, planned rates or seeds that differ within a pair. | See the comparison, and how the winner changes with the objective. |
 
-`scoring.UNAVAILABLE`, a text that starts with `unavailable`, means a gap rule could not judge: in `summary.csv`, because that file has no complete per-chunk timing; in `qualified-rates.json` and `report.html`, because some file of the stack has none. The notices at the top of `report.html` name those files; measure those rates again to judge them. A pair whose files differ in a measurement setting, planned rates or seeds still gets a promise map, with the difference marked above it. A file that cannot be read, or whose call records give other values than its stored summary in the original lab's summary fields, cannot be interpreted, so it is left out and listed. `5.collect.py` exits non-zero when it leaves a file out or `report.html` fails to render; the other files are still written. When no file can be read, it writes nothing and removes an earlier `report.html`. When it draws no promise map, it removes an earlier `report.html` from `--output` and prints why.
+`scoring.UNAVAILABLE`, a text that starts with `unavailable`, means a gap rule could not judge: in `summary.csv`, because that file has no complete per-chunk timing; in `qualified-rates.json`, because some file of the stack has none. The printed notices name those files; measure those rates again to judge them. A file that cannot be read, or whose call records give other values than its stored summary in the original lab's summary fields, cannot be interpreted, so it is left out and listed. `5.collect.py` exits non-zero when it leaves a file out; the other files are still written. When no file can be read, it writes nothing.
 
 ## Cleanup and local checks
 

@@ -30,8 +30,8 @@ def _run(directory, architecture, rate, rows, seed=345, rates=None, duration_s=1
     return path
 
 
-def _collect(out, *runs, report=False, extra=()):
-    argv = ['5.collect.py', '--runs', *map(str, runs), '--output', str(out), *extra] + ([] if report else ['--no-report'])
+def _collect(out, *runs, extra=()):
+    argv = ['5.collect.py', '--runs', *map(str, runs), '--output', str(out), *extra]
     printed = io.StringIO()
     with patch('sys.argv', argv), contextlib.redirect_stdout(printed):
         collect.main()
@@ -105,46 +105,14 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(list(first[0]), list(second[0]))
         self.assertEqual(len(first), 2)
 
-    def test_a_report_rendering_error_keeps_the_other_outputs_and_exits_non_zero(self):
-        records = [_call(10)] * 10
-        with tempfile.TemporaryDirectory() as d:
-            out = Path(d) / 'out'
-            with patch.object(collect.report, 'render_sections', side_effect=KeyError('section')), self.assertRaises(SystemExit) as refusal:
-                _collect(out, _run(d, 'unified', 1, records, seed=1), _run(d, 'disaggregated', 1, records, seed=1), report=True)
-            self.assertIn('report.html rendering failed (KeyError', str(refusal.exception))
-            self.assertEqual(sorted(p.name for p in out.iterdir()), ['qualified-rates.json', 'summary.csv'])
-
-    def test_a_rate_that_fails_only_on_client_launch_lag_names_it_in_the_report(self):
-        lagged = [dict(_call(10), client_launch_lag_ms=250)] + [_call(10)] * 9
-        with tempfile.TemporaryDirectory() as d:
-            out = Path(d) / 'out'
-            rows, _, _ = _collect(out, _run(d, 'unified', 1, lagged, seed=1), _run(d, 'disaggregated', 1, [_call(10)] * 10, seed=1), report=True)
-            html = (out / 'report.html').read_text()
-        self.assertEqual({r['meets_joint_slo'] for r in rows if r['architecture'] == 'unified'}, {'False'})
-        self.assertIn('<span class="pf fail">invalid</span> <small class="over">launch lag 250 ms over 100 ms</small>', html)
-
-    def test_calls_that_could_not_connect_are_failed_calls_counted_in_the_report_without_invalidating_the_rate(self):
+    def test_calls_that_could_not_connect_are_failed_calls_named_without_invalidating_the_rate(self):
         unreachable = [{'ok': False, 'sent': True, 'error': 'ConnectError', 'client_launch_lag_ms': 0, 'chunks': []}] + [_call(10)] * 9
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / 'out'
-            rows, _, printed = _collect(out, _run(d, 'unified', 1, unreachable, seed=1), _run(d, 'disaggregated', 1, [_call(10)] * 10, seed=1), report=True)
-            html = (out / 'report.html').read_text()
+            rows, _, printed = _collect(out, _run(d, 'unified', 1, unreachable, seed=1), _run(d, 'disaggregated', 1, [_call(10)] * 10, seed=1))
         u = next(r for r in rows if r['architecture'] == 'unified')
         self.assertEqual((u['meets_joint_slo'], u['client_valid'], u['unreachable_calls']), ('True', 'True', '1'))
-        self.assertIn('<span class="pf pass">ok</span><small>1 calls could not connect</small>', html)
-        self.assertIn('1 of 10 calls could not connect; if they cluster or are many, rerun the ramp from this rate into the same --output', html)
-
-    def test_pooled_ttft_modes_relabel_the_itl_p99_attainment_and_the_percentile_figure(self):
-        records = [_call(10)] * 10
-        for metric, position in (('p95', 'is 19, so p95'), ('p99', 'is 20, so p99')):
-            with tempfile.TemporaryDirectory() as d:
-                out = Path(d) / 'out'
-                _collect(out, _run(d, 'unified', 1, records, seed=1), _run(d, 'disaggregated', 1, records, seed=1), report=True,
-                         extra=('--ttft-metric', metric))
-                html = (out / 'report.html').read_text()
-            self.assertIn('share of planned calls that completed, pooled p99', html, metric)
-            self.assertIn(f'TTFT is judged as {metric} of the completed calls', html, metric)
-            self.assertIn(position, html, metric)
+        self.assertIn('1 of 10 calls could not connect; if they cluster or are many, rerun the ramp from this rate into the same --output', printed)
 
     def test_another_objective_on_the_command_line_recomputes_the_rows_and_marks_them(self):
         ok = lambda ttft: {'ok': True, 'sent': True, 'ttft_ms': ttft, 'tpot_ms': 10, 'client_launch_lag_ms': 0, 'chunks': []}
@@ -183,28 +151,6 @@ class CollectTests(unittest.TestCase):
             _, qualified, _ = _collect(Path(d) / 'out', *runs)
         self.assertEqual(_group(qualified, 'unified')['highest_tested_offered_tasks_per_s_meeting_slo'], 2)
 
-    def test_a_pair_measured_with_different_settings_still_gets_a_map_with_the_difference_marked(self):
-        records = [_call(10)] * 10
-        with tempfile.TemporaryDirectory() as d:
-            out = Path(d) / 'out'
-            _, _, _ = _collect(out, _run(d, 'unified', 1, records, seed=1, duration_s=20), _run(d, 'disaggregated', 1, records, seed=2), report=True)
-            html = (out / 'report.html').read_text()
-        self.assertIn('duration_s differs (disaggregated 10; unified 20); measure again with them aligned', html)
-        self.assertIn('seeds differ (disaggregated 2; unified 1)', html)
-        self.assertIn('class="pmap"', html)
-
-    def test_one_stack_only_draws_no_report_removes_the_earlier_one_and_says_why(self):
-        records = [_call(10)] * 10
-        with tempfile.TemporaryDirectory() as d:
-            out = Path(d) / 'out'
-            _collect(out, _run(d, 'unified', 1, records, seed=1), _run(d, 'disaggregated', 1, records, seed=1), report=True)
-            self.assertTrue((out / 'report.html').exists())
-            _, _, printed = _collect(out, _run(d, 'unified', 1, records, seed=1), report=True)
-            self.assertFalse((out / 'report.html').exists())
-        self.assertIn('Removed the earlier', printed)
-        self.assertIn('has no unified and disaggregated pair', printed)
-
-
     def test_unreadable_and_malformed_files_are_left_out_and_listed_while_the_others_are_collected(self):
         with tempfile.TemporaryDirectory() as d:
             good = _run(d, 'unified', 1, [_call(10)] * 10, seed=1)
@@ -230,7 +176,7 @@ class CollectTests(unittest.TestCase):
         self.assertEqual((rows[0]['objective_given_on_command_line'], rows[0]['seed']), ('False', '7'))
         self.assertNotIn('given on the command line', printed)
 
-    def test_marks_are_printed_when_no_report_is_drawn_and_a_missing_traffic_hash_is_marked(self):
+    def test_differing_settings_and_a_missing_traffic_hash_are_printed(self):
         with tempfile.TemporaryDirectory() as d:
             u = _run(d, 'unified', 1, [_call(10)] * 10, seed=1, duration_s=20)
             dis = _run(d, 'disaggregated', 1, [_call(10)] * 10, seed=1)
@@ -240,18 +186,6 @@ class CollectTests(unittest.TestCase):
             _, _, printed = _collect(Path(d) / 'out', u, dis)
         self.assertIn('B-long-context: duration_s differs', printed)
         self.assertIn('traffic_sha256 unknown for disaggregated', printed)
-
-    def test_a_run_with_no_readable_file_removes_the_earlier_report(self):
-        with tempfile.TemporaryDirectory() as d:
-            out = Path(d) / 'out'
-            _collect(out, _run(d, 'unified', 1, [_call(10)] * 10, seed=1), _run(d, 'disaggregated', 1, [_call(10)] * 10, seed=1), report=True)
-            empty = Path(d) / 'empty'
-            empty.mkdir()
-            with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()):
-                with patch('sys.argv', ['5.collect.py', '--runs', str(empty), '--output', str(out)]):
-                    collect.main()
-            self.assertFalse((out / 'report.html').exists())
-
 
 if __name__ == '__main__':
     unittest.main()

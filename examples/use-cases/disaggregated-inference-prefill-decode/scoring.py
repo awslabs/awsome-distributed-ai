@@ -1,5 +1,5 @@
 """Judging for this example: the three TPOT rules, the qualifying rate and goodput as the original lab computes them,
-the promise-map grid, and reading stored ramp files. report.html's glossary states the same definitions.
+and reading stored ramp files.
 """
 import hashlib
 import json
@@ -12,10 +12,6 @@ TTFT_METRICS = ("per-call", "p95", "p99")
 # Neither a rate nor None ("qualified at no rate"). Compare with ==: copies come back from JSON.
 UNAVAILABLE = "unavailable (a file of this stack has no per-chunk timing)"
 
-# Fixed default axes, so promise maps from different runs line up.
-DEFAULT_TTFT_AXIS_MS = tuple(range(500, 5001, 500))
-DEFAULT_TPOT_AXIS_MS = tuple(range(10, 101, 10))
-
 # The summary keys the original lab's benchmark.py wrote; check_reproduces compares only these.
 ORIGINAL_SUMMARY_KEYS = ("offered_tasks_per_s", "actual_sent_calls_per_s", "measurement_including_drain_s", "planned_calls",
                          "sent_calls", "completed_calls", "failed_or_skipped_calls", "p90_ttft_ms_success_only",
@@ -24,17 +20,9 @@ ORIGINAL_SUMMARY_KEYS = ("offered_tasks_per_s", "actual_sent_calls_per_s", "meas
                          "useful_calls_per_s_per_gpu", "gpu_count", "max_client_launch_lag_ms", "prefix_overlap_fraction_min",
                          "cached_tokens_sum_reported", "input_tokens_sum_sent", "client_valid")
 
-# Measurement settings outside the original grouping key; report.html marks a pair whose files differ in one.
+# Measurement settings outside the original grouping key; 5.collect.py names a pair whose files differ in one.
 PAIR_SETTINGS = ("duration_s", "timeout_s", "context_length_tokens", "skip_warmup", "stop_failure_fraction",
                  "max_client_lag_ms", "traffic_sha256")
-
-
-def validate_grid_axis(values):
-    """De-duplicated so a repeated bound is one column, not a duplicated cell; ValueError lists every bad bound."""
-    bad = [v for v in values if not math.isfinite(v) or v <= 0]
-    if bad:
-        raise ValueError(f"needs finite positive bounds, got {bad}")
-    return tuple(sorted(set(values)))
 
 
 def percentile(values, fraction):
@@ -125,7 +113,7 @@ def summarize(records, duration_s, gpus, ttft_ms, tpot_ms, attainment, offered_t
             "prefix_overlap_fraction_min": min((r["prefix_overlap_fraction"] for r in records if r.get("prefix_overlap_fraction") is not None), default=None),
             "cached_tokens_sum_reported": sum(r.get("cached_tokens") or 0 for r in records),
             "input_tokens_sum_sent": sum(r.get("input_tokens", 0) for r in attempts),
-            # Added for the gap rules and report.html; a ConnectError is counted here and stays a failed call.
+            # Added for the gap rules; a ConnectError is counted here and stays a failed call.
             "tpot_metric": tpot_metric, "ttft_metric": ttft_metric,
             "p95_ttft_ms_success_only": percentile(ttft_values, .95), "p99_ttft_ms_success_only": percentile(ttft_values, .99),
             "itl_ms_p99": itl_p99, "longest_gap_ms_p90": percentile([worst_itl_ms(r) for r in ok], .9) if gaps else None,
@@ -151,33 +139,6 @@ def highest_qualifying(rows, ttft_ms, tpot_ms, attainment, score):
     at = [s for s in met if s["offered_tasks_per_s"] == top]
     return {"offered": top, "useful_per_gpu": max(s["useful_calls_per_s_per_gpu"] for s in at),
             "files_met": len(at), "files_measured": sum(1 for row, _s in scored if row["offered"] == top)}
-
-
-def verdict(by_arch):
-    """(top rate, winner, leaders). An UNAVAILABLE side yields 'incomparable', never a win over a
-    stack that was not measured."""
-    if any(b == UNAVAILABLE for b in by_arch.values()):
-        return None, 'incomparable', []
-    numeric = {a: b for a, b in by_arch.items() if isinstance(b, dict)}
-    top = max((b['offered'] for b in numeric.values()), default=None)
-    lead = sorted(a for a, b in numeric.items() if b['offered'] == top) if top is not None else []
-    return top, (lead[0] if len(lead) == 1 else 'tie' if lead else 'neither'), lead
-
-
-def promise_grid(rows_by_arch, ttft_axis, tpot_axis, attainment, score_factory, availability):
-    """{definition: {(ttft_ms, tpot_ms): {"by_arch", "top", "winner", "lead"}}}."""
-    grid = {}
-    for definition in TPOT_METRICS:
-        score = score_factory(definition)
-        cells = {}
-        for ttft in ttft_axis:
-            for tpot in tpot_axis:
-                by_arch = {arch: highest_qualifying(rows, ttft, tpot, attainment, score) if availability[(arch, definition)] else UNAVAILABLE
-                           for arch, rows in rows_by_arch.items()}
-                top, winner, lead = verdict(by_arch)
-                cells[(ttft, tpot)] = {"by_arch": by_arch, "top": top, "winner": winner, "lead": lead}
-        grid[definition] = cells
-    return grid
 
 
 def availability_by_arch(rows_by_arch):
