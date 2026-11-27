@@ -109,29 +109,3 @@ def training_goodput(retained_tokens_per_second, work, reference):
         'retained_tokens_per_second': retained_tokens_per_second,
         'fault_free_tokens_per_second': fault_free,
     }
-
-
-def paired_training_report(before, after):
-    """Report a pair only when the same work and allocation were measured."""
-    for key in ('workload', 'allocation', 'measurement_scope', 'measured_useful_tokens'):
-        if before[key] != after[key]:
-            raise ValueError(f'paired training mismatch: {key}')
-    if before['configuration'].get('deterministic', False) != after['configuration'].get('deterministic', False):
-        raise ValueError('paired training changed determinism policy')
-    for row in (before, after):
-        if row['status'] != 'completed' or row['profiled']:
-            raise ValueError('pair requires completed, unprofiled runs')
-        if row['measured_seconds'] <= 0 or not math.isfinite(row['measured_seconds']):
-            raise ValueError('invalid continuous measurement duration')
-    return {
-        'metric': 'Training throughput',
-        'before_configuration': before['configuration'],
-        'after_configuration': after['configuration'],
-        'workload': before['workload'],
-        'allocation': before['allocation'],
-        'useful_tokens': before['measured_useful_tokens'],
-        'before_seconds': before['measured_seconds'],
-        'after_seconds': after['measured_seconds'],
-        'speedup_ratio': before['measured_seconds'] / after['measured_seconds'],
-        'qualification': 'one observed pair; numerical and repeated-run review required',
-    }

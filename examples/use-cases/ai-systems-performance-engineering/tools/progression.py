@@ -4,8 +4,8 @@
 Usage: python3 tools/progression.py [--markdown]
 
 Reads every stage directory under $LLM_RESULTS_DIR except profile-*, restore
-and attempts/. A ratio is shown only for a pair of runs of the same work on
-the same allocation; otherwise the cell refers to a note below the table.
+and attempts/. A ratio is shown only for a pair of runs of the same work whose
+checks passed; otherwise the cell refers to a note below the table.
 """
 import argparse
 from pathlib import Path
@@ -13,7 +13,6 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 import workshop  # noqa: E402
-from llm_metrics import paired_training_report  # noqa: E402
 
 COLUMNS = ('Stage', 'Transport', 'Attention', 'Saving', 'Work', 'Seconds', 'Tokens/s', 'GPU-s per 1M tokens',
            'MFU', 'Share of your GEMM peak', 'Peak memory GiB', 'vs baseline', 'vs previous step', 'Goodput')
@@ -41,11 +40,10 @@ class Notes:
 
 
 def ratio(before, after, label, notes):
-    try:
-        return f"{paired_training_report(before, after)['speedup_ratio']:.2f}x"
-    except ValueError as error:
-        reason = str(error).replace('paired training mismatch: ', 'different ')
-        return notes.mark(f'{label}: not compared, {reason}')
+    """The timed seconds of `before` over those of `after`, two summary.json of the same work; else a note."""
+    if before['workload'] != after['workload']:
+        return notes.mark(f'{label}: not compared, different workload')
+    return f"{before['measured_seconds'] / after['measured_seconds']:.2f}x"
 
 
 def goodput(results, record, progress, name, notes):

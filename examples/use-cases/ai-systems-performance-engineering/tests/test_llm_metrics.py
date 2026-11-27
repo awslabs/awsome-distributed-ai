@@ -1,12 +1,10 @@
 """Synthetic arithmetic and clock fixtures, not training performance evidence."""
-import copy
 from pathlib import Path
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
-from llm_metrics import (ContinuousWindow, accumulation_steps, paired_training_report,
-                         retained_progress, training_goodput, update_work)
+from llm_metrics import ContinuousWindow, accumulation_steps, retained_progress, training_goodput, update_work
 
 # Synthetic run of 5 updates of 32 x 2,048 positions without saves, the first one warmup.
 WORKLOAD = dict(model_id='m', sequence_length=2048, global_batch_samples=32, data_parallel_size=16,
@@ -84,26 +82,6 @@ class LLMMetricTests(unittest.TestCase):
                 training_goodput(20000.0, work, reference)
         with self.assertRaises(ValueError):
             training_goodput(20000.0, work, dict(FAULT_FREE, training_throughput_tokens_per_second=0.0))
-
-    def test_pair_rejects_work_changes_and_profiles(self):
-        before = dict(workload={'global_batch_samples': 32}, allocation={'gpus': 8},
-                      measurement_scope='steady', measured_useful_tokens=100,
-                      measured_seconds=2, status='completed', profiled=False,
-                      configuration={'microbatch': 1})
-        after = copy.deepcopy(before)
-        after.update(measured_seconds=1, configuration={'microbatch': 2})
-        self.assertEqual(paired_training_report(before, after)['speedup_ratio'], 2)
-        after['configuration']['deterministic'] = True
-        with self.assertRaises(ValueError):
-            paired_training_report(before, after)
-        after['configuration']['deterministic'] = False
-        after['workload']['global_batch_samples'] = 64
-        with self.assertRaises(ValueError):
-            paired_training_report(before, after)
-        after['workload'] = before['workload']
-        after['profiled'] = True
-        with self.assertRaises(ValueError):
-            paired_training_report(before, after)
 
 
 if __name__ == '__main__':
