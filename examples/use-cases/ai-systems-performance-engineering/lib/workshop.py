@@ -21,8 +21,7 @@ import time
 import urllib.parse
 import urllib.request
 
-import charts
-from llm_metrics import paired_training_report, training_goodput, update_work
+from llm_metrics import training_goodput, update_work
 
 LAB = Path(__file__).resolve().parents[1]
 STATE = Path.home() / '.aim347'
@@ -90,10 +89,8 @@ STAGES = {
 }
 for _change in TRY_CHANGES:
     STAGES[f'try-{_change}'] = STAGES[f'rerun-{_change}'] = STAGES['sdpa']
-MAIN_PATH = ('baseline', 'efa', 'sdpa')
 PROGRESSION_ORDER = ('baseline', 'probe-socket-eager', 'sdpa-socket', 'efa', 'probe-efa-eager',
                      'sdpa', 'ckpt-sync', 'ckpt-process', 'interrupt')
-PROFILE_ORDER = ('profile-socket-eager', 'profile-efa-eager', 'profile-efa-sdpa')
 
 
 class UsageError(ValueError):
@@ -249,11 +246,6 @@ def gemm_share_text(summary, sequence_length, ceilings, world):
     rate = ceilings['gemm_tflops_per_gpu']
     value = gemm_share(summary['training_throughput_tokens_per_second'], sequence_length, rate, world)
     return f'{100 * value:.1f} %  (your GEMM peak {rate:.1f} TFLOP/s per GPU)'
-
-
-def compute_only_seconds(targets, sequence_length, gemm_tflops_per_gpu, gpus):
-    """The update's arithmetic alone at the measured GEMM peak."""
-    return targets * flop_per_token(sequence_length) / (gpus * gemm_tflops_per_gpu * 1e12)
 
 
 def peak_memory_gib(summary):
@@ -804,7 +796,7 @@ def stage_goodput(results, record, progress, gpu):
     problem = run_problem(record)
     if problem:
         raise ValueError(problem)
-    run, reference, problem = chart_stage(results, 'sdpa')
+    run, reference, problem = stage_record(results, 'sdpa')
     if problem:
         raise ValueError('no completed run of stage sdpa')
     if run.get('exit_status') != 0:
@@ -950,7 +942,8 @@ def result_lines(stage, stage_dir, run, results, world):
             efa_rows = (read_rows(Path(results) / 'efa' / 'train' / 'rank-0-updates.jsonl')
                         if stage['name'] == 'sdpa' else None)
             lines = timed_block(stage, stage_dir, summary, read_ceilings(results), world, efa_rows, results)
-            lines += stage_chart_lines(stage, results, world)
+            if stage.get('change') and not stage['with_change']:
+                lines += [''] + try_comparison_lines(stage['change'], results)
     for check in run.get('checks', []):
         if not check['ok']:
             lines.append(f"check failed: {check['name']}: {check['detail']}")
@@ -959,20 +952,9 @@ def result_lines(stage, stage_dir, run, results, world):
     return lines
 
 
-# ---------------------------------------------------------------- charts
-# Each chart answers one question about the participant's own runs. A stage
-# without a bar prints the reason; nothing is estimated.
+# ---------------------------------------------------------------- comparisons
 
-MAIN_PATH_LABELS = {'baseline': ('baseline (socket, eager)', 'baseline'), 'efa': ('efa (efa, eager)', 'EFA'),
-                    'sdpa': ('sdpa (efa, sdpa)', 'SDPA')}
-# The full-length stage that a half-length probe is read beside, by transport and attention.
-FULL_LENGTH = {('socket', 'eager'): 'baseline', ('socket', 'sdpa'): 'sdpa-socket',
-               ('efa', 'eager'): 'efa', ('efa', 'sdpa'): 'sdpa'}
-UPDATE_COMPARED_WITH = {'sdpa-socket': 'baseline', 'efa': 'baseline', 'sdpa': 'efa'}
-SAVING_STAGES = (('ckpt-sync', 'synchronous saves'), ('ckpt-process', 'process-mode saves'))
-
-
-def chart_stage(results, name, record=('train', 'summary.json')):
+def stage_record(results, name, record=('train', 'summary.json')):
     """(run, record, None) for a stage that has a result, else (run or None, None, the reason).
 
     The record is the stage's summary.json unless another path under the stage is given."""
@@ -982,7 +964,7 @@ def chart_stage(results, name, record=('train', 'summary.json')):
     if run.get('status') != 'finished':
         return run, None, 'still running'
     if run.get('exit_status') == 4:
-        return run, None, 'failed, so it has no bar; run it again'
+        return run, None, 'failed; run it again'
     summary = read_json(Path(results, name, *record))
     if not summary:
         return run, None, f'no {record[-1]}'
@@ -993,193 +975,26 @@ def failed_check(run):
     return ', a check failed' if run.get('exit_status') == 5 else ''
 
 
-def cumulative_chart_lines(results):
-    """One bar per main-path stage: 1.00x plus each later step's measured change."""
-    baseline_run, baseline, _ = chart_stage(results, 'baseline')
-    rows = []
-    for name in MAIN_PATH:
-        label, change = MAIN_PATH_LABELS[name]
-        run, summary, problem = chart_stage(results, name)
-        row = dict(label=label, change=change, total=None, note=problem)
-        if not problem:
-            row['label'] += failed_check(run)
-            if baseline is None:
-                row['note'] = 'no baseline to compare with'
-            elif failed_check(run) or failed_check(baseline_run):
-                row['note'] = 'not compared: a check failed'
-            elif name == 'baseline':
-                row['total'] = 1.0
-            else:
-                try:
-                    row['total'] = paired_training_report(baseline, summary)['speedup_ratio']
-                except ValueError as error:
-                    row['note'] = 'not compared: ' + str(error).replace('paired training mismatch: ', 'different ')
-        rows.append(row)
-    return charts.cumulative_chart('How much faster than baseline? Each bar adds one step '
-                                   '(your runs, same work on the same allocation)', rows)
-
-
-def update_time_names(stage):
-    if stage['name'].startswith('probe-'):
-        return [FULL_LENGTH[(stage['transport'], stage['attention'])], stage['name']]
-    if stage['name'] in UPDATE_COMPARED_WITH:
-        return [UPDATE_COMPARED_WITH[stage['name']], stage['name']]
-    return [stage['name']]
-
-
-def update_time_chart_lines(results, names, ceilings, world):
-    """One update of each stage: the model's arithmetic at the GEMM peak, and the rest."""
-    rows = []
-    for name in names:
-        run, summary, problem = chart_stage(results, name)
-        if problem:
-            rows.append(dict(label=name, note=problem))
-            continue
-        stage = run['plan']
-        timed = stage['updates'] - stage['warmup_updates']
-        seconds = summary['measured_seconds'] / timed
-        row = dict(label=f"{name}, {stage['sequence_length']:,} positions", text=f'{seconds:.2f} s{failed_check(run)}')
-        if ceilings:
-            arithmetic = compute_only_seconds(summary['measured_useful_tokens'] / timed, stage['sequence_length'],
-                                              ceilings['gemm_tflops_per_gpu'], world)
-            row.update(segments=[(arithmetic, charts.FILLS[0]), (seconds - arithmetic, charts.FILLS[3])],
-                       detail=f'{charts.FILLS[0]} arithmetic at your GEMM peak {arithmetic:.2f} s   '
-                              f'{charts.FILLS[3]} the rest {seconds - arithmetic:.2f} s')
-        else:
-            row.update(segments=[(seconds, charts.FILLS[3])],
-                       detail='arithmetic n/a (run bash tools/measure-ceilings.sh)')
-        rows.append(row)
-    # 0.1 s per cell while the bars fit, as in the profile chart, so that a bar keeps its length
-    # from one module to the next.
-    return charts.stacked_chart("One update: the model's arithmetic at your GEMM peak, and the rest "
-                                '(mean of the timed updates)', rows, [], 's', minimum_scale=0.1)
-
-
-def memory_chart_lines(results, names):
-    rows = []
-    for name in names:
-        run, summary, problem = chart_stage(results, name)
-        if problem:
-            rows.append(dict(label=name, value=None, note=problem))
-            continue
-        peak = peak_memory_gib(summary)
-        rows.append(dict(label=f"{name} ({run['plan']['attention']} attention)", value=peak,
-                         text=f'{peak:.2f} GiB{failed_check(run)}'))
-    return charts.bar_chart('Peak memory of the largest rank', rows, 'GiB')
-
-
-def goodput_chart_lines(results):
-    """Training goodput of the two saving stages on an axis from 0 to 1.
-
-    Only these two: their intervals start and end at the same events. The goodput of interrupt,
-    whose interval also covers both launches and both model loads, is in its result block and
-    in the table of tools/progression.py.
-    """
-    rows = []
-    for name, what in SAVING_STAGES:
-        label = f'{name}, {what}'
-        run, summary, problem = chart_stage(results, name)
-        progress = (summary or {}).get('retained_progress')
-        if not problem and (not progress or 'retained_tokens_per_second' not in progress):
-            problem = 'no retained progress in summary.json'
-        if not problem:
-            try:
-                value = stage_goodput(results, summary, progress, gpu_name(summary))['training_goodput']
-            except ValueError as error:
-                problem = str(error)
-            else:
-                if value > 1:
-                    # The measured value, with no bar past the axis.
-                    problem = f'{value:.2f}, {ABOVE_ONE}'
-        if problem:
-            rows.append(dict(label=label, value=None, note=problem))
-            continue
-        rows.append(dict(label=label, value=value, text=f'{value:.2f}{failed_check(run)}'))
-    return charts.bar_chart('Training goodput, from 0 to 1 (higher is better)', rows, '', axis=1, notes=[
-        'Training goodput = (retained tokens / interval) / (tokens/s of stage sdpa, which does not save)',
-        "The interval also holds the data loader's start and the warmup updates: below 1 even without saves"])
-
-
-def configuration_differences(first, second):
-    keys = set(first['configuration']) | set(second['configuration'])
-    return sorted(key for key in keys if first['configuration'].get(key) != second['configuration'].get(key))
-
-
 def try_comparison_lines(change, results):
     """After rerun-<change>: the spread between the two unchanged runs, and the change against their mean.
 
-    The two unchanged runs are stage sdpa and rerun-<change>. Nothing is compared unless all
-    three runs did the same work on the same allocation, the two unchanged runs have the same
-    configuration, and the run with the change differs from them only in the change.
+    The two unchanged runs are stage sdpa and rerun-<change>. A run that is missing, unfinished
+    or failed, or whose check failed, gives no comparison.
     """
-    names = ('sdpa', f'rerun-{change}', f'try-{change}')
-    summaries = []
-    for name in names:
-        run, summary, problem = chart_stage(results, name)
+    seconds = []
+    for name in ('sdpa', f'rerun-{change}', f'try-{change}'):
+        run, summary, problem = stage_record(results, name)
         if problem:
             return [f'not compared: {name} {problem}']
         if failed_check(run):
             return [f'not compared: a check of {name} failed']
-        summaries.append(summary)
-    sdpa, rerun, tried = summaries
-    try:
-        paired_training_report(sdpa, rerun)
-        paired_training_report(rerun, tried)
-    except ValueError as error:
-        return ['not compared: ' + str(error).replace('paired training mismatch: ', 'different ')]
-    differs = configuration_differences(sdpa, rerun)
-    if differs:
-        return [f'not compared: sdpa and rerun-{change} differ in ' + ', '.join(differs)]
-    spec = TRY_CHANGES[change]
-    allowed = (spec['key'],) + spec['also']
-    differs = [key for key in configuration_differences(rerun, tried) if key not in allowed]
-    if differs:
-        return [f'not compared: try-{change} differs from rerun-{change} in ' + ', '.join(differs)]
-    if tried['configuration'].get(spec['key']) != spec['value']:
-        return [f"not compared: try-{change} did not record {spec['key']} {setting_text(spec['value'])}"]
-    unchanged = (sdpa['measured_seconds'], rerun['measured_seconds'])
-    mean = sum(unchanged) / 2
-    spread = abs(unchanged[0] - unchanged[1])
-    delta = tried['measured_seconds'] - mean
-    direction = 'shorter' if delta < 0 else ('longer' if delta > 0 else 'no difference')
-    lines = [f'run-to-run spread: |sdpa - rerun-{change}| = {spread:.3f} s ({100 * spread / mean:.2f} %)',
-             f'change: try-{change} - mean(sdpa, rerun-{change}) = {delta:+.3f} s ({100 * delta / mean:+.2f} %)']
-    return lines + [''] + charts.bar_chart(
-        'Your change beside the spread between two runs without it (seconds of the timed updates)',
-        [dict(label=f'spread, sdpa and rerun-{change}', value=spread, text=f'{spread:.3f} s'),
-         dict(label=f'change, try-{change}', value=abs(delta), text=f'{abs(delta):.3f} s {direction}')], 's')
-
-
-def stage_chart_lines(stage, results, world):
-    """The charts printed under the result block of a timed stage."""
-    if stage['kind'] != 'timed':
-        return []
-    if stage['saving'] != 'none':
-        return [''] + goodput_chart_lines(results)
-    if stage.get('change'):
-        # The run with the change prints its block; the comparison follows the rerun.
-        return [] if stage['with_change'] else [''] + try_comparison_lines(stage['change'], results)
-    lines = [''] + update_time_chart_lines(results, update_time_names(stage), read_ceilings(results), world)
-    if stage['name'] == 'sdpa':
-        lines += [''] + memory_chart_lines(results, ['efa', 'sdpa'])
-    if stage['name'] in MAIN_PATH:
-        lines += [''] + cumulative_chart_lines(results)
-    return lines
-
-
-def protocol_chart_lines(runs):
-    """Bus bandwidth by message size, NCCL's own choice beside Simple. runs: [(label, rows, choices)]."""
-    rows = []
-    for size in sorted(set(runs[0][1]) | set(runs[1][1])):
-        for index, (label, table, choices) in enumerate(runs):
-            name = f"{size_text(size) if index == 0 else '':>7}  {label}"
-            if size not in table:
-                rows.append(dict(label=name, value=None, note='no row in all_reduce_perf.txt'))
-                continue
-            busbw = table[size][1]
-            rows.append(dict(label=name, value=busbw, text=f"{busbw:.2f}  {', '.join(choices.get(size, ['-']))}"))
-    return charts.bar_chart('Bus bandwidth of all_reduce_perf by message size, GB/s (higher is better)', rows,
-                            'GB/s')
+        seconds.append(summary['measured_seconds'])
+    sdpa, rerun, tried = seconds
+    mean = (sdpa + rerun) / 2
+    spread = abs(sdpa - rerun)
+    delta = tried - mean
+    return [f'run-to-run spread: |sdpa - rerun-{change}| = {spread:.3f} s ({100 * spread / mean:.2f} %)',
+            f'change: try-{change} - mean(sdpa, rerun-{change}) = {delta:+.3f} s ({100 * delta / mean:+.2f} %)']
 
 
 # ---------------------------------------------------------------- allocation
@@ -1559,7 +1374,6 @@ def protocol_report(out, world):
                  + '; '.join(f'{nccl_proto_text(nccl, world)} ({label})' for label, _, _, nccl in runs))
     lines.append('[aim347] NCCL logs, with the algorithm and protocol of every collective on rank 0: '
                  + ', '.join(str(Path(out) / variant) for variant, _ in PROTOCOL_RUNS))
-    lines += [''] + protocol_chart_lines([(label, rows, choices) for label, rows, choices, _ in runs])
     wrong = [f"{label} at {', '.join(size_text(size) for size, row in sorted(rows.items()) if row[2])}"
              for label, rows, _, _ in runs if any(row[2] for row in rows.values())]
     if wrong:

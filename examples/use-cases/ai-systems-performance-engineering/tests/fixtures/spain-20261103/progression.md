@@ -14,19 +14,3 @@ GEMM peak 167.9 TFLOP/s per GPU, memory read 663 GB/s per GPU, ridge 253 FLOP pe
 
 MFU: the model's FLOP per second / (16 x the dense BF16 peak, 202.8 TFLOP/s per GPU for NVIDIA RTX PRO 4500 Blackwell Server Edition, estimated from NVIDIA specifications)
 Share of your GEMM peak: the same FLOP per second / (16 x your GEMM peak, 167.9 TFLOP/s per GPU)
-
-```text
-How much faster than baseline? Each bar adds one step (your runs, same work on the same allocation)
-  baseline (socket, eager)  ██████████                                          1.00x
-  efa (efa, eager)          ██████████░░░░░░░░░░░░░                             2.29x  (EFA +1.29x)
-  sdpa (efa, sdpa)          ██████████░░░░░░░░░░░░░▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓             3.89x  (SDPA +1.60x)
-                            █ baseline 1.00x   ░ EFA +1.29x   ▓ SDPA +1.60x   one cell = 0.1x
-
-Training goodput, from 0 to 1 (higher is better)
-  ckpt-sync, synchronous saves      not run yet
-  ckpt-process, process-mode saves  not run yet
-                                    0                                                1
-                                    one cell = 0.02
-  Training goodput = (retained tokens / interval) / (tokens/s of stage sdpa, which does not save)
-  The interval also holds the data loader's start and the warmup updates: below 1 even without saves
-```

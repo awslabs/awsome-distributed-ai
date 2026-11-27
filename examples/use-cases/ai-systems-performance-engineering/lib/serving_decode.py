@@ -22,7 +22,6 @@ import sys
 import time
 import urllib.request
 
-import charts
 from serving_metrics import decode_record, snapshot
 import workshop
 
@@ -175,20 +174,6 @@ def mbu_text(mbu):
 def row_line(summary):
     return (f"{summary['requests_per_gpu']:>16}   {summary['seconds_per_step'] * 1e3:>11.2f}   "
             f"{summary['tokens_per_second_per_gpu']:>23,.0f}   {mbu_text(summary['mbu'])}")
-
-
-def chart_lines(summaries):
-    first = summaries[0]['tokens_per_second_per_gpu']
-    rows = []
-    for summary in summaries:
-        count, rate = summary['requests_per_gpu'], summary['tokens_per_second_per_gpu']
-        detail = f"MBU {mbu_text(summary['mbu'])}"
-        if summary is not summaries[0]:
-            detail = f'{rate / first:.1f}x one request, ' + detail
-        rows.append(dict(label=f"{count} request{'s' if count > 1 else ''} per GPU", value=rate,
-                         text=f'{rate:,.0f}  ({detail})'))
-    return charts.bar_chart('Decode tokens/s per GPU by requests per GPU (higher is better)', rows,
-                            'tokens/s per GPU')
 
 
 def wait_for_servers(process, run_dir, servers, gpus, env, *, runner, health, clock, sleep, out):
@@ -347,9 +332,6 @@ def run(env=None, *, popen=subprocess.Popen, runner=subprocess.run, health=answe
         workshop.write_atomic(run_dir / 'serving.json', json.dumps(record, indent=2) + '\n')
         say('[aim347] the servers have stopped and the GPUs are free' if status == 0 else
             f'[aim347] the serving step ended with exit status {status}; see {run_dir / "launch.log"}')
-    if code == 0:
-        say('')
-        say('\n'.join(chart_lines(summaries)))
     return code
 
 

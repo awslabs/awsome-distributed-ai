@@ -140,7 +140,7 @@ class DecodeMeasurementTests(unittest.TestCase):
             serving_decode.measure_level(endpoints, 1, request=servers.request, snap=servers.snapshot,
                                          sleep=lambda seconds: None)
 
-    def test_rows_and_chart(self):
+    def test_rows(self):
         summaries = [dict(requests_per_gpu=1, seconds_per_step=0.009, tokens_per_second_per_gpu=1 / 0.009,
                           mbu=0.5736),
                      dict(requests_per_gpu=16, seconds_per_step=0.0125, tokens_per_second_per_gpu=16 / 0.0125,
@@ -149,13 +149,6 @@ class DecodeMeasurementTests(unittest.TestCase):
                          '               1          9.00                       111   57 %')
         self.assertEqual(serving_decode.row_line(summaries[1]),
                          '              16         12.50                     1,280   n/a')
-        lines = serving_decode.chart_lines(summaries)
-        self.assertEqual(lines[0], 'Decode tokens/s per GPU by requests per GPU (higher is better)')
-        self.assertTrue(lines[1].startswith('  1 request per GPU  '))
-        self.assertTrue(lines[1].endswith('111  (MBU 57 %)'))
-        self.assertTrue(lines[2].startswith('  16 requests per GPU  '))
-        self.assertTrue(lines[2].endswith('1,280  (11.5x one request, MBU n/a)'))
-        self.assertIn('tokens/s per GPU', lines[-1])
 
 
 class FakeProcess:
@@ -266,8 +259,6 @@ class ServeRunTests(unittest.TestCase):
         self.assertIn('               1          9.00                       111   57 %', text)
         self.assertIn('              64          9.00                     7,111   57 %', text)
         self.assertIn('[aim347] the servers have stopped and the GPUs are free', text)
-        self.assertEqual(self.lines[-1].splitlines()[0],
-                         'Decode tokens/s per GPU by requests per GPU (higher is better)')
         # The progression table reads only stage directories with run.json.
         self.assertFalse((run_dir / 'run.json').exists())
 

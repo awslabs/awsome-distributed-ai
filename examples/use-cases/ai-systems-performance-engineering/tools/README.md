@@ -5,8 +5,8 @@ These tools run one SmolLM2-1.7B training job with PyTorch FSDP2 on two `g7.48xl
 1. `bash tools/check.sh` checks the nodes, GPUs, EFA devices, FSx for Lustre, the training image, the data, the monitoring stack and the Grafana sign-in.
 2. `bash tools/measure-ceilings.sh` measures each GPU's GEMM and memory-read ceilings.
 3. `bash tools/run.sh <stage>` runs one stage of the job as a Slurm batch job on both GPU nodes. Every training run goes through it.
-4. `python3 tools/profile-table.py` reads one profiled update into a fixed table and a chart.
-5. `python3 tools/progression.py --markdown` prints the table of all your runs and two charts.
+4. `python3 tools/profile-table.py` reads one profiled update into a fixed table.
+5. `python3 tools/progression.py --markdown` prints the table of all your runs.
 
 `bash tools/nccl-protocols.sh` is optional. It runs nccl-tests on both nodes to compare NCCL's own protocol choice over EFA with `NCCL_PROTO=Simple`.
 
@@ -81,17 +81,7 @@ MFU (model FLOPs utilization, PaLM section 4.1 and appendix B) is tokens per sec
 | NVIDIA L40S (`g6e.48xlarge`) | 362.05 TFLOP/s | NVIDIA's L40S page: "362.05 I 733*", "*With Sparsity" |
 | NVIDIA RTX PRO 6000 Blackwell Server Edition (`g7e.48xlarge`) | 467.8 TFLOP/s, estimated | 1,024 × 188 SMs × 2,430 MHz boost clock (product brief), with the same full-rate assumption; a measured 429.1 TFLOP/s GEMM on `g7e.12xlarge` ([README.md](../README.md)) exceeds the 233.9 that a half rate would allow. NVIDIA's page lists 1 PFLOP without a sparsity mark |
 
-For a GPU that the table does not list, the MFU line reads `n/a (no dense peak for <name>)`. Dense BF16 training cannot use a 2:4 sparse rate. The next line, `share of your GEMM peak`, divides the same FLOP rate by 16 times your GEMM peak, the GEMM rate you measured with `hold-and-measure.sh`. It is not MFU: it says how close the run came to what a large GEMM reaches on your GPUs, and the update chart's arithmetic time uses the same measured value. GPU-seconds per million tokens is the timed interval times 16, divided by the timed target tokens, times 10^6.
-
-### Charts under the result block
-
-The Session Manager terminal cannot open image files, so the tools draw their charts with Unicode block characters, at most 100 columns wide, under the result they belong to. Each chart is built from your own result files. A stage that has not run, is still running, failed, or cannot be paired prints the reason in place of its bar; no value is estimated. Each chart ends with the value of one cell. The update chart and the profile chart keep 0.1 s per cell as long as the bars fit, so a bar keeps its length from one module to the next.
-
-- **One update.** Every timed stage without saves, apart from the two of `try`, prints the mean seconds of one timed update as a bar of two parts: the model's arithmetic at your GEMM peak (the targets of one update times 6N + 12·L·d·T FLOP, divided by 16 times the GEMM peak) and the rest. The bar of the stage is drawn below the bar of the stage it is read beside: a `probe` beside the full-length stage with the same transport and attention (`baseline` for `probe-socket-eager`, `efa` for `probe-efa-eager`), `sdpa-socket` and `efa` beside `baseline`, and `sdpa` beside `efa`. Without `ceilings.json` the bar shows the update time alone.
-- **Peak memory.** `sdpa` also prints the peak memory of the largest rank of `efa` and `sdpa`.
-- **Speed-up over baseline.** `baseline`, `efa` and `sdpa` then print one bar for each of the three stages. The `baseline` bar is 1.00×, and each later bar is the bar before it plus that stage's measured change, so the chart grows as the session proceeds; 1.00× keeps its ten cells as long as the bars fit in 100 columns. A bar uses the same pairs as the `vs baseline` column of `progression.py`: the same work on the same allocation, completed and unprofiled. A change that made the job slower marks the part it lost with `·`.
-- **Training goodput.** `ckpt-sync` and `ckpt-process` print the training goodput of both saving stages on an axis from 0 to 1; the key line gives the scale. Only these two have bars, because their intervals start and end at the same events. The goodput of `interrupt`, whose interval also covers both launches and both model loads, is in its result block and in the `Goodput` column of `progression.py`. Each bar is the stage's retained progress rate divided by the fault-free rate of stage `sdpa`, as in the result block, and two lines under the chart state this definition and that even a run without saves stays below 1. A stage whose goodput cannot be computed prints the reason in place of its bar, and a value above 1 prints as measured, with `above 1: check the reference run`, and no bar.
-- **A change against the spread.** `rerun-<change>` prints the spread between `sdpa` and the rerun and the size of the change as two bars on one scale, with the direction of the change (`shorter` or `longer`) beside its bar.
+For a GPU that the table does not list, the MFU line reads `n/a (no dense peak for <name>)`. Dense BF16 training cannot use a 2:4 sparse rate. The next line, `share of your GEMM peak`, divides the same FLOP rate by 16 times your GEMM peak, the GEMM rate you measured with `measure-ceilings.sh`. It is not MFU: it says how close the run came to what a large GEMM reaches on your GPUs. GPU-seconds per million tokens is the timed interval times 16, divided by the timed target tokens, times 10^6.
 
 ### Checks after a run
 
@@ -118,7 +108,6 @@ $LLM_RESULTS_DIR/<stage>/
   efa-after.json      the same after the run
   train/              trainer output: summary.json, rank-*-updates.jsonl, trace-rank-*.json (profile),
                       checkpoints/, checkpoint-events-rank-*.jsonl (not for interrupt)
-  profile-tables.json profile stages: each table that profile-table.py has read, for its chart
   campaign/           interrupt only: interrupted/ and resumed/ (trainer output of each segment),
                       interrupted.log and resumed.log, events.jsonl, campaign.json
 $LLM_RESULTS_DIR/attempts/<stage>-<UTC>/   an earlier attempt of the stage, moved here before a rerun
@@ -145,7 +134,7 @@ The window of update u is the span `ProfilerStep#<u-1>` on the training thread. 
 
 With `--profile`, the trainer marks every attention call with `record_function('attention/core')`.
 
-Below the table, a chart shows where the time of the update goes, as a bar for this profile stage and for each other profile stage whose table you have read with the same `--rank` and `--update`, in the order `profile-socket-eager`, `profile-efa-eager`, `profile-efa-sdpa`. The tool keeps each table it reads in the stage's `profile-tables.json`, so the chart does not parse the other traces again. The parts of a bar do not overlap and add up to the update: attention core kernels, the other compute kernels, communication not overlapped, GPU idle, and, when it reaches 0.0005 s, the time in which only copies run. Input wait is time of the CPU thread and can overlap the GPU parts, so it is printed beside the bar and not in it. A profile stage whose table has not been read prints the command that adds it. The tool uses only the standard library.
+The parts of an update that do not overlap are attention core kernels, the other compute kernels (`compute kernels busy` minus `attention core kernels`), communication not overlapped and GPU idle. Input wait is time of the CPU thread and can overlap them. The tool uses only the standard library.
 
 Exit status: 0; 2 when the stage or a trace is missing; 3 when the trace has no `ProfilerStep` span for the update.
 
@@ -157,9 +146,7 @@ python3 tools/progression.py [--markdown]
 
 Prints the ceilings, then one row per stage, in the order `baseline`, `probe-socket-eager`, `sdpa-socket`, `efa`, `probe-efa-eager`, `sdpa`, `ckpt-sync`, `ckpt-process`, `interrupt`, then `try-<change>` and `rerun-<change>` for each change you ran, followed by any other stage. It skips `profile-*`, `restore` and `attempts/`. The columns are the settings, the work (updates times positions), the timed seconds, tokens per second, GPU-seconds per million tokens, MFU against the GPU's dense BF16 peak, the share of your measured GEMM peak, peak memory, the speed-up against `baseline` and against the previous main-path stage, and the training goodput of the saving and interrupt stages, with two decimals. The retained progress of a saving stage comes from its `summary.json`, over the interval from the end of setup (model loading, FSDP wrapping, optimizer, checkpoint manager) to the end of the final flush and the closing synchronization across ranks. The retained progress of `interrupt` comes from `campaign.json`, over the whole command from just before the first launch to the exit of the resumed launch, so it also includes both launches and both model loads. Its goodput cell refers to a note that gives both intervals. Each goodput divides the retained progress rate by the fault-free rate of stage `sdpa`. When the result block would print `not computed`, the cell refers to a note that gives the reason; a value above 1 keeps its value and refers to a note to check the reference run. Below the notes, two lines state the denominators of MFU and of the share of your GEMM peak. A speed-up is shown only for a pair of runs that `paired_training_report` in `lib/llm_metrics.py` accepts: the same work on the same allocation, completed and unprofiled. Otherwise the cell refers to a note below the table that names the difference. The main path is `baseline`, `efa`, `sdpa`. `sdpa-socket` is compared with `baseline`, and the stages of `try` with `sdpa`. Because each step's speed-up divides the previous stage's seconds by this stage's seconds, the product of the steps along the main path equals the last stage's speed-up against `baseline`.
 
-Below the table and its notes, the tool prints two charts: the speed-up over baseline of `baseline`, `efa` and `sdpa`, and the training goodput of `ckpt-sync` and `ckpt-process`. They are the charts that `run.sh` prints under the result blocks ([Charts under the result block](#charts-under-the-result-block)).
-
-`--markdown` prints the same table in Markdown for your notes, with the charts in a fenced code block.
+`--markdown` prints the same table in Markdown for your notes.
 
 ## nccl-protocols.sh
 
@@ -175,7 +162,7 @@ Runs nccl-tests over EFA on both nodes, once with NCCL's own protocol choice and
 
 Both runs use `all_reduce_perf` from 1 MiB to 64 MiB on all 16 GPUs, one MPI rank per GPU, in the training image, with the EFA settings of `2.run-llm.sh`. The first leaves `NCCL_PROTO` unset, so that NCCL chooses the protocol, and the second sets `NCCL_PROTO=Simple`. With `NCCL_DEBUG_SUBSYS=INIT,NET,ENV,TUNING`, rank 0 logs the algorithm and protocol of every collective. NCCL writes its log to one file per process, `nccl-<host>-<pid>.log`, so that the table on standard output stays readable. The rank script is `lib/nccl-protocols-rank.sh`.
 
-The tool prints one row per size with the out-of-place time and bus bandwidth of each run and the algorithm and protocol that rank 0 logged, then the `NCCL_PROTO` value each run's log shows and the two log directories, and then a chart of the bus bandwidth of both runs at each size. The results are in `$LLM_RESULTS_DIR/nccl-protocols/<UTC>/nccl-choice/` and `simple/`, each with `all_reduce_perf.txt` and the NCCL logs. `progression.py` does not list them.
+The tool prints one row per size with the out-of-place time and bus bandwidth of each run and the algorithm and protocol that rank 0 logged, then the `NCCL_PROTO` value each run's log shows and the two log directories. The results are in `$LLM_RESULTS_DIR/nccl-protocols/<UTC>/nccl-choice/` and `simple/`, each with `all_reduce_perf.txt` and the NCCL logs. `progression.py` does not list them.
 
 Exit status: 0; 2 for usage; 4 when a run fails (the tool prints the last 40 lines of its output); 5 when nccl-tests reports wrong values.
 
@@ -198,7 +185,7 @@ The step time comes from each server's own counters, read before and after a lev
 | `decode tokens/s per GPU` | Requests per GPU ÷ seconds per step |
 | `MBU` | The time that reading the weights at your memory-read ceiling takes, as a share of the step: 3,422,752,768 bytes (1,711,376,384 BF16 parameters) ÷ the ceiling in `ceilings.json` ÷ seconds per step. It counts the weights only. The ceiling is the rate of the 1 GiB streaming-read kernel, and a decode step can read faster, so MBU can exceed 100 %. `n/a` without `ceilings.json` |
 
-Before the rows it prints the time to read the weights at the ceiling and the decode rate of one request per GPU at a step of that time, the ceiling ÷ the weight bytes. Then it stops the servers by sending SIGTERM to the step with `scancel --signal=TERM`, so that `lib/serve_llm.py` stops its vLLM processes, and prints a chart of the decode rate at each level. Ctrl-C, SIGTERM and a closed terminal (SIGHUP) also stop the servers. While they run, the tool keeps `~/.aim347/serving`, and `run.sh` and `nccl-protocols.sh` refuse to start. Everything goes to `$LLM_RESULTS_DIR/serving-<UTC>/`: `launch.log` (the step's output), `node-<n>/replica-<n>.log` (each server's log), `manifest.json`, `endpoints.txt` and `serving.json` (every level with each server's counter differences). The directory has no `run.json`, so `progression.py` does not list it.
+Before the rows it prints the time to read the weights at the ceiling and the decode rate of one request per GPU at a step of that time, the ceiling ÷ the weight bytes. Then it stops the servers by sending SIGTERM to the step with `scancel --signal=TERM`, so that `lib/serve_llm.py` stops its vLLM processes. Ctrl-C, SIGTERM and a closed terminal (SIGHUP) also stop the servers. Everything goes to `$LLM_RESULTS_DIR/serving-<UTC>/`: `launch.log` (the step's output), `node-<n>/replica-<n>.log` (each server's log), `manifest.json`, `endpoints.txt` and `serving.json` (every level with each server's counter differences). The directory has no `run.json`, so `progression.py` does not list it.
 
 Exit status: 0; 2 for usage or without the image; 4 when the servers do not all answer or a request fails (the tool prints the last 40 lines of `launch.log`); 5 when the counters do not match the requests; 130 when interrupted.
 
@@ -254,7 +241,7 @@ Exit status: 0; 1 when `--verify` times out (the message names the condition it 
 The CPU tests of the tools need only the standard library:
 
 ```bash
-PYTHONPATH=lib python3 -m unittest tests.test_workshop_tools tests.test_charts tests.test_serving_decode -v
+PYTHONPATH=lib python3 -m unittest tests.test_workshop_tools tests.test_serving_decode -v
 ```
 
 `tests/test_progression_golden.py` compares the table of `tools/progression.py` with `tests/fixtures/spain-20261103/progression.md`, for the result files of the run on two `g7.48xlarge` of 2026-11-03 in that directory.
