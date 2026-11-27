@@ -132,13 +132,3 @@ class UpdateBatches(Sampler):
 
     def __len__(self):
         return (self.stop - self.start) * self.accumulation
-
-
-def trim_padding(batch):
-    """Remove only all-padding suffix columns of a right-padded CPU batch.
-
-    Document membership, positions and shifted loss labels remain unchanged.
-    This changes executed tensor shapes, not the useful-token denominator.
-    """
-    width = max(2, int(batch['attention_mask'].sum(dim=1).max()))
-    return {key: value[:, :width].contiguous() for key, value in batch.items()}

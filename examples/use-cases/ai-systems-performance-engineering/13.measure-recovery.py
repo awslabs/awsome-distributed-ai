@@ -2,7 +2,7 @@
 """Measure one fresh interrupted training campaign and its real DCP resume.
 
 Run inside one retained Slurm allocation. The command after -- must launch
-lib/train_llm.py on that allocation, with --checkpoint-mode sync or async.
+lib/train_llm.py on that allocation, with --checkpoint-mode sync or process.
 Both subprocesses and the recovery gap use this controller's monotonic clock.
 """
 import argparse
@@ -21,8 +21,6 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--allocated-gpus', type=int, required=True)
     parser.add_argument('--interrupt-after-update', type=int, required=True)
-    parser.add_argument('--diagnostic-profile', action='store_true',
-                        help='collect phase traces; retain full campaign interval but prohibit performance acceptance')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
@@ -30,10 +28,8 @@ def main():
         parser.error('provide a training launch command, allocation and interruption index')
     if any(item.split('=')[0] in ('--output', '--resume', '--interrupt-after-update') for item in command):
         parser.error('campaign sets output, resume and interruption arguments')
-    if any(item.split('=')[0] in ('--profile', '--verify-numerics') for item in command):
-        parser.error('the campaign measurement excludes profiler and correctness-snapshot runs')
-    if args.diagnostic_profile:
-        command = command + ['--profile']
+    if '--profile' in command:
+        parser.error('the campaign measurement excludes profiled runs')
     args.output.mkdir(parents=True, exist_ok=False)
     interrupted = args.output / 'interrupted'
     resumed = args.output / 'resumed'
@@ -84,9 +80,8 @@ def main():
     elapsed = time.perf_counter() - started
     finished_utc = time.time()
     summary = json.loads((resumed / 'summary.json').read_text())
-    if (summary['status'] != 'completed' or summary.get('profiled') != args.diagnostic_profile
-            or summary.get('numerical_verification')):
-        raise RuntimeError('campaign requires completed training with the requested profiling policy and no numerical snapshots')
+    if summary['status'] != 'completed':
+        raise RuntimeError('the resumed training did not complete')
     final_markers = sorted((resumed / 'checkpoints').glob('update-*/COMPLETED.json'))
     if not final_markers:
         raise RuntimeError('resume did not publish a final durable checkpoint')
@@ -98,21 +93,13 @@ def main():
         raise RuntimeError('final checkpoint lacks new progress or changes the workload')
     if summary['allocation']['gpu_count'] != args.allocated_gpus:
         raise RuntimeError('campaign GPU allocation differs from resumed training')
-    if args.diagnostic_profile:
-        for segment in (interrupted, resumed):
-            for rank in range(restored['workload']['data_parallel_size']):
-                for kind in ('setup-trace', 'trace'):
-                    trace = segment / f'{kind}-rank-{rank}.json'
-                    trace_events = json.loads(trace.read_text())['traceEvents']
-                    if not trace_events:
-                        raise RuntimeError(f'empty diagnostic trace: {trace}')
     result = retained_progress(
         0, final['useful_tokens'], elapsed, initial_updates=0, durable_updates=final['completed_updates'],
         scope='from just before the first launch to the exit of the resumed launch, including both launches with their model loads, training, saves, the controlled stop, checkpoint selection, restore, replay and the final flush; allocation retained throughout; initial Slurm allocation wait and pre-campaign preparation excluded')
     result.update(status='completed', source='fresh controlled interruption and resume',
                   evidence_kind=summary['evidence_kind'], started_utc_seconds=started_utc,
                   finished_utc_seconds=finished_utc, allocation=summary['allocation'],
-                  events=events, profiled=summary['profiled'], numerical_verification=summary['numerical_verification'],
+                  events=events, profiled=summary['profiled'],
                   workload=summary['workload'], configuration=summary['configuration'],
                   restored_update=restored['completed_updates'],
                   interrupted_update=args.interrupt_after_update,
@@ -120,7 +107,6 @@ def main():
                   replayed_update_count=args.interrupt_after_update - restored['completed_updates'],
                   sources={'interrupted': str(interrupted), 'resumed': str(resumed)},
                   allocation_scope='same GPUs retained for entire campaign; excludes preparation before campaign launch')
-    result['performance_eligible'] = not args.diagnostic_profile
     (args.output / 'campaign.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2))
 

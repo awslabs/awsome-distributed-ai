@@ -11,7 +11,7 @@ from llm_metrics import (ContinuousWindow, accumulation_steps, paired_training_r
 # Synthetic run of 5 updates of 32 x 2,048 positions without saves, the first one warmup.
 WORKLOAD = dict(model_id='m', sequence_length=2048, global_batch_samples=32, data_parallel_size=16,
                 updates=5, warmup_updates=1)
-FAULT_FREE = dict(status='completed', profiled=False, numerical_verification=False,
+FAULT_FREE = dict(status='completed', profiled=False,
                   measurement_scope='continuous post-warmup training', workload=WORKLOAD,
                   measured_useful_tokens=4 * 65504, training_throughput_tokens_per_second=80000.0)
 
@@ -79,8 +79,6 @@ class LLMMetricTests(unittest.TestCase):
                 (None, 'no fault-free run'), ({}, 'no fault-free run'),
                 (dict(FAULT_FREE, status='failed'), 'the fault-free run is not completed'),
                 (dict(FAULT_FREE, profiled=True), 'the fault-free run was profiled'),
-                (dict(FAULT_FREE, numerical_verification=True), 'the fault-free run ran numerical verification'),
-                (dict(FAULT_FREE, performance_eligible=False), 'the fault-free run is marked not performance-eligible'),
                 (dict(FAULT_FREE, measurement_scope='training/save/final durable completion'), 'the fault-free run saves')):
             with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, f'^{reason}$'):
                 training_goodput(20000.0, work, reference)

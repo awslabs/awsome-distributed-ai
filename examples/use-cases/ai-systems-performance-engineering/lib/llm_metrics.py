@@ -90,8 +90,6 @@ def training_goodput(retained_tokens_per_second, work, reference):
         raise ValueError('no fault-free run')
     for failed, reason in ((reference.get('status') != 'completed', 'is not completed'),
                            (reference.get('profiled'), 'was profiled'),
-                           (reference.get('numerical_verification'), 'ran numerical verification'),
-                           (reference.get('performance_eligible') is False, 'is marked not performance-eligible'),
                            (reference.get('measurement_scope') != 'continuous post-warmup training', 'saves')):
         if failed:
             raise ValueError(f'the fault-free run {reason}')
@@ -121,7 +119,7 @@ def paired_training_report(before, after):
     if before['configuration'].get('deterministic', False) != after['configuration'].get('deterministic', False):
         raise ValueError('paired training changed determinism policy')
     for row in (before, after):
-        if row['status'] != 'completed' or row['profiled'] or row.get('numerical_verification'):
+        if row['status'] != 'completed' or row['profiled']:
             raise ValueError('pair requires completed, unprofiled runs')
         if row['measured_seconds'] <= 0 or not math.isfinite(row['measured_seconds']):
             raise ValueError('invalid continuous measurement duration')
