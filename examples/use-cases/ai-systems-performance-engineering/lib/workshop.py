@@ -731,93 +731,31 @@ CAMPAIGN_INTERVAL = ('from just before the first launch to the exit of the',
                      'resumed launch, with both launches and both model loads')
 
 
-# The recorded settings in which a run may differ from its fault-free reference, stage sdpa.
-REFERENCE_MAY_DIFFER = ('checkpoint_mode',)
 ABOVE_ONE = 'above 1: check the reference run'
 
 
-def retained_updates(record, progress):
-    """(updates completed at the start, update of the last durable checkpoint) of the retained tokens.
-
-    Result files written before the retained-progress block held these two numbers record them
-    only for a fresh run or a campaign, which start at update 0 and end durable at their last update.
-    """
-    first, last = progress.get('initial_completed_updates'), progress.get('durable_completed_updates')
-    if first is None or last is None:
-        if record.get('initial_progress_tokens', 0):
-            raise ValueError('no update range of the resumed segment in the result file')
-        if 'completed_updates' not in record:
-            raise ValueError('no completed_updates in the result file')
-        first, last = 0, record['completed_updates']
-    if last <= first:
-        raise ValueError('no update retained')
-    return first, last
-
-
-def run_problem(record):
-    """Why this run's own record gives no goodput, or None."""
-    for failed, reason in ((record.get('status') != 'completed', 'this run is not completed'),
-                           (record.get('profiled'), 'this run was profiled'),
-                           (record.get('numerical_verification'), 'this run ran numerical verification'),
-                           (record.get('performance_eligible') is False, 'this run is marked not performance-eligible')):
-        if failed:
-            return reason
-    return None
-
-
-def reference_differences(record, gpu, reference):
-    """What the reference run of stage sdpa recorded differently from this run, beyond the checkpoint mode."""
-    config, other = record.get('configuration'), reference.get('configuration')
-    if not config or not other:
-        return ['configuration (not recorded)']
-    differs = sorted(key for key in set(config) | set(other)
-                     if key not in REFERENCE_MAY_DIFFER and config.get(key) != other.get(key))
-    workload, other_workload = record.get('workload', {}), reference.get('workload', {})
-    differs += [key for key in ('model_revision', 'precision') if workload.get(key) != other_workload.get(key)]
-    label = record.get('allocation', {}).get('label')
-    if not label:
-        differs.append('allocation label (not recorded)')
-    elif label != reference.get('allocation', {}).get('label'):
-        differs.append('allocation label')
-    if gpu is None:
-        differs.append('GPU (not recorded)')
-    elif gpu != gpu_name(reference):
-        differs.append('GPU')
-    return differs
-
-
-def stage_goodput(results, record, progress, gpu):
+def stage_goodput(results, record, progress):
     """Training goodput of a saving stage (record: its summary.json) or of interrupt (its campaign.json).
 
-    gpu is the GPU name of the run. The fault-free rate is the throughput of stage sdpa in the
-    same results directory, which does the same work per update with the same configuration
-    and allocation, without saves. Raises ValueError, with the reason, when there is none.
+    The fault-free rate is the throughput of stage sdpa in the same results directory, which does
+    the same work per update without saves. Raises ValueError, with the reason, when stage sdpa
+    has no finished run, its check failed, or it did different work per update.
     """
-    problem = run_problem(record)
-    if problem:
-        raise ValueError(problem)
     run, reference, problem = stage_record(results, 'sdpa')
     if problem:
         raise ValueError('no completed run of stage sdpa')
-    if run.get('exit_status') != 0:
-        raise ValueError('stage sdpa had a failed check' if run.get('exit_status') == 5
-                         else f"stage sdpa ended with exit status {run.get('exit_status')}")
-    differs = reference_differences(record, gpu, reference)
-    if differs:
-        raise ValueError('stage sdpa ran with a different ' + ', '.join(differs))
-    first, last = retained_updates(record, progress)
-    work = update_work(record.get('workload', {}), progress['retained_progress_tokens'], last - first)
+    if failed_check(run):
+        raise ValueError('stage sdpa had a failed check')
+    updates = progress['durable_completed_updates'] - progress['initial_completed_updates']
+    work = update_work(record.get('workload', {}), progress['retained_progress_tokens'], updates)
     return training_goodput(progress['retained_tokens_per_second'], work, reference)
 
 
-def goodput_pairs(record, progress, interval, results, gpu):
+def goodput_pairs(record, progress, interval, results):
     """The block lines from the retained tokens to the training goodput."""
     if not progress or 'retained_tokens_per_second' not in progress:
         return [('training goodput', 'not computed: no retained progress in the result file')]
-    try:
-        first, last = retained_updates(record, progress)
-    except ValueError as error:
-        return [('training goodput', f'not computed: {error}')]
+    first, last = progress['initial_completed_updates'], progress['durable_completed_updates']
     pairs = [('retained tokens', f"{progress['retained_progress_tokens']:,} "
                                  f"(updates {first + 1}-{last}, durable at the end)"),
              ('interval', f"{progress['elapsed_seconds']:.2f} s, {interval[0]}")]
@@ -825,7 +763,7 @@ def goodput_pairs(record, progress, interval, results, gpu):
     pairs.append(('retained progress rate',
                   f"{progress['retained_tokens_per_second']:,.0f} tokens/s (retained tokens / interval)"))
     try:
-        goodput = stage_goodput(results, record, progress, gpu)
+        goodput = stage_goodput(results, record, progress)
     except ValueError as error:
         return pairs + [('training goodput', f'not computed: {error}')]
     value = goodput['training_goodput']
@@ -840,13 +778,8 @@ def checkpoint_block(stage, stage_dir, summary, world, results):
     return [describe(stage)] + lines_for(
         [(f"timed updates {first}-{stage['updates']} with saves and final flush",
           f"{summary['measured_seconds']:.2f} s  ({summary['measured_useful_tokens']:,} targets)")]
-        + goodput_pairs(summary, summary.get('retained_progress'), SAVING_INTERVAL, results, gpu_name(summary))
+        + goodput_pairs(summary, summary.get('retained_progress'), SAVING_INTERVAL, results)
         + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
-
-
-def campaign_gpu(campaign_dir):
-    """The GPU name of a campaign: campaign.json records none; its resumed run's summary.json does."""
-    return gpu_name(read_json(Path(campaign_dir) / 'resumed' / 'summary.json', {}))
 
 
 def restore_block(stage, stage_dir, reference_rows, world):
@@ -896,7 +829,7 @@ def interrupt_block(stage, stage_dir, world, results):
     lines.append(f"  resumed from update {restored}; first update after the resume: "
                  f"{resumed[0]['update'] if resumed else 'none'}")
     lines.append(f"  updates run twice: {restored + 1}-{stop} ({campaign.get('replayed_update_count')} updates)")
-    lines += lines_for(goodput_pairs(campaign, campaign, CAMPAIGN_INTERVAL, results, campaign_gpu(campaign_dir)))
+    lines += lines_for(goodput_pairs(campaign, campaign, CAMPAIGN_INTERVAL, results))
     return lines + lines_for(nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
 
 

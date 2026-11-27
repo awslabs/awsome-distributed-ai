@@ -48,12 +48,12 @@ def ratio(before, after, label, notes):
         return notes.mark(f'{label}: not compared, {reason}')
 
 
-def goodput(results, record, progress, gpu, name, notes):
+def goodput(results, record, progress, name, notes):
     """The training goodput of a saving stage or interrupt, or a note with the reason it has none."""
     if not progress or 'retained_tokens_per_second' not in progress:
         return notes.mark(f'{name}: no retained progress in its result file, so no goodput')
     try:
-        value = workshop.stage_goodput(results, record, progress, gpu)['training_goodput']
+        value = workshop.stage_goodput(results, record, progress)['training_goodput']
     except ValueError as error:
         return notes.mark(f'{name}: goodput not computed, {error}')
     if value > 1:
@@ -117,7 +117,7 @@ def collect(results, notes):
                                   'synchronization across ranks, so the saving rows leave the model load out')
             row.update({'Seconds': f"{campaign.get('elapsed_seconds', 0):.2f}",
                         'vs baseline': once,
-                        'Goodput': f"{goodput(results, campaign, campaign, workshop.campaign_gpu(results / name / 'campaign'), name, notes)} {interval}"})
+                        'Goodput': f"{goodput(results, campaign, campaign, name, notes)} {interval}"})
             row['_campaign'] = campaign
             rows.append(row)
             continue
@@ -136,8 +136,7 @@ def collect(results, notes):
                         if ceilings else 'n/a'),
                     'Peak memory GiB': f'{workshop.peak_memory_gib(summary):.2f}'})
         if stage['saving'] != 'none':
-            row['Goodput'] = goodput(results, summary, summary.get('retained_progress'), workshop.gpu_name(summary),
-                                     name, notes)
+            row['Goodput'] = goodput(results, summary, summary.get('retained_progress'), name, notes)
         rows.append(row)
     for row in rows:
         name = row['_name']
