@@ -17,7 +17,7 @@ exec srun --nodes="$SLURM_JOB_NUM_NODES" --ntasks="$SLURM_JOB_NUM_NODES" --ntask
     for ((gpu = 0; gpu < GPUS_PER_NODE; gpu++)); do
         # --port is the API. VLLM_PORT is where a server starts looking for its internal ports.
         CUDA_VISIBLE_DEVICES=$gpu VLLM_PORT=$((20000 + 1000 * gpu)) vllm serve /data/model \
-            --served-model-name aim347 --dtype bfloat16 --max-model-len 4096 --max-num-seqs 256 \
+            --served-model-name aim347 --tensor-parallel-size 1 --dtype bfloat16 --max-model-len 4096 --max-num-seqs 256 \
             --max-num-batched-tokens 8192 --gpu-memory-utilization 0.85 --no-enable-prefix-caching \
             --generation-config vllm --host 0.0.0.0 --port $((8100 + gpu)) \
             > "/results/$SERVING_RUN/$node-gpu$gpu.log" 2>&1 &
