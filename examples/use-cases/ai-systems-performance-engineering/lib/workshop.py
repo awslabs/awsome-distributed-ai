@@ -559,14 +559,9 @@ def flush_seconds(rows, events, final_update):
     return None
 
 
-def pairs_lines(pairs, width=29):
-    width = max([width] + [len(label) + 2 for label, _ in pairs])
-    return [f'  {label:<{width}}{value}' for label, value in pairs]
-
-
 def lines_for(pairs):
-    """Each line at width 29, or two spaces after a longer label."""
-    return [line for pair in pairs for line in pairs_lines([pair])]
+    """One line per (label, value) pair: the value at column 32, or two spaces after a longer label."""
+    return [f'  {label:<{max(29, len(label) + 2)}}{value}' for label, value in pairs]
 
 
 def describe(stage):
@@ -667,40 +662,6 @@ def efa_pair(stage_dir):
     return ('EFA bytes during the run', efa_text(deltas))
 
 
-def timed_block(stage, stage_dir, summary, ceilings, world, efa_losses=None, results=None):
-    if stage['saving'] != 'none':
-        return checkpoint_block(stage, stage_dir, summary, world, results)
-    seconds = summary['measured_seconds']
-    tokens = summary['measured_useful_tokens']
-    rate = summary['training_throughput_tokens_per_second']
-    first = stage['warmup_updates'] + 1
-    lines = [describe(stage)] + lines_for(
-        [(f"timed updates {first}-{stage['updates']}", f'{seconds:.2f} s  ({tokens:,} targets)'),
-         ('tokens/s', f'{rate:,.0f}'),
-         ('GPU-seconds per 1M tokens', f'{gpu_seconds_per_million_tokens(seconds, tokens, world):.0f}'),
-         ('MFU', mfu_text(summary, stage['sequence_length'], world)),
-         ('share of your GEMM peak', gemm_share_text(summary, stage['sequence_length'], ceilings, world)),
-         ('peak memory (largest rank)', f'{peak_memory_gib(summary):.2f} GiB')]
-        + ([change_pair(stage, summary)] if stage.get('change') else [])
-        + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
-    if efa_losses is not None:
-        lines += loss_comparison_lines(stage, stage_dir, efa_losses)
-    return lines
-
-
-def loss_comparison_lines(stage, stage_dir, reference_rows):
-    rows = read_rows(Path(stage_dir) / 'train' / 'rank-0-updates.jsonl')
-    last = stage['updates']
-    if not reference_rows:
-        return ['  stage efa has no rows to compare losses with; run bash tools/run.sh efa first']
-    these = [row['global_mean_loss'] for row in rows]
-    eager = [row['global_mean_loss'] for row in reference_rows]
-    return pairs_lines([
-        (f"losses 1-{last} (this run, {stage['attention']})", ' '.join(f'{v:.6f}' for v in these)),
-        (f'losses 1-{last} (stage efa, eager)', ' '.join(f'{v:.6f}' for v in eager)),
-        ('difference', ' '.join(f'{a - b:+.6f}' for a, b in zip(these, eager)))])
-
-
 # The intervals of the retained progress, as lib/train_llm.py (segment_seconds) and
 # 13.measure-recovery.py (elapsed) measure them.
 SAVING_INTERVAL = ('from the end of setup (model loading, FSDP wrapping,',
@@ -752,64 +713,66 @@ def goodput_pairs(record, progress, interval, results):
                                          + (f', {ABOVE_ONE}' if value > 1 else ''))]
 
 
-def checkpoint_block(stage, stage_dir, summary, world, results):
-    first = stage['warmup_updates'] + 1
-    return [describe(stage)] + lines_for(
-        [(f"timed updates {first}-{stage['updates']} with saves and final flush",
-          f"{summary['measured_seconds']:.2f} s  ({summary['measured_useful_tokens']:,} targets)")]
-        + goodput_pairs(summary, summary.get('retained_progress'), SAVING_INTERVAL, results)
-        + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
+def timed_pairs(stage, summary, ceilings, world, results):
+    """The result of a timed stage: its rates or, for a stage that saves, its training goodput."""
+    seconds = summary['measured_seconds']
+    tokens = summary['measured_useful_tokens']
+    timed = f"timed updates {stage['warmup_updates'] + 1}-{stage['updates']}"
+    if stage['saving'] != 'none':
+        return ([(f'{timed} with saves and final flush', f'{seconds:.2f} s  ({tokens:,} targets)')]
+                + goodput_pairs(summary, summary.get('retained_progress'), SAVING_INTERVAL, results))
+    rate = summary['training_throughput_tokens_per_second']
+    pairs = [(timed, f'{seconds:.2f} s  ({tokens:,} targets)'),
+             ('tokens/s', f'{rate:,.0f}'),
+             ('GPU-seconds per 1M tokens', f'{gpu_seconds_per_million_tokens(seconds, tokens, world):.0f}'),
+             ('MFU', mfu_text(summary, stage['sequence_length'], world)),
+             ('share of your GEMM peak', gemm_share_text(summary, stage['sequence_length'], ceilings, world)),
+             ('peak memory (largest rank)', f'{peak_memory_gib(summary):.2f} GiB')]
+    return pairs + ([change_pair(stage, summary)] if stage.get('change') else [])
 
 
-def restore_block(stage, stage_dir, reference_rows, world):
-    rows = read_rows(Path(stage_dir) / 'train' / 'rank-0-updates.jsonl')
-    reference = {row['update']: row['global_mean_loss'] for row in reference_rows}
-    lines = [describe(stage), f"{'update':>8}{'loss (restore)':>17}{'loss (ckpt-sync)':>19}{'difference':>13}"]
-    differences = []
-    for row in rows:
-        before = reference.get(row['update'])
-        difference = None if before is None else row['global_mean_loss'] - before
-        if difference is not None:
-            differences.append(abs(difference))
-        lines.append(f"{row['update']:>8}{row['global_mean_loss']:>17.6f}"
-                     + (f'{before:>19.6f}{difference:>+13.6f}' if before is not None else f"{'-':>19}{'-':>13}"))
-    lines.append(f"first update after restore: {rows[0]['update'] if rows else 'none'}")
-    if differences:
-        lines.append(f'largest loss difference over updates {rows[0]["update"]}-{rows[-1]["update"]}: '
-                     f'{max(differences):.6f}')
-    return lines + lines_for(nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
-
-
-def upload_sentence(row, save_updates, stop):
-    saved = [update for update in save_updates if update <= stop]
-    newest = saved[-1]
-    earlier = saved[-2] if len(saved) > 1 else 0
-    if row['checkpoint_upload_pending'] and row['durable_update'] == earlier:
-        return f'the update-{newest} upload was still pending (durable update {earlier})'
-    return f"the update-{newest} upload had finished (durable update {row['durable_update']})"
-
-
-def interrupt_block(stage, stage_dir, world, results):
+def interrupt_pairs(stage_dir, results):
+    """Where the run stopped and resumed, from campaign.json and rank 0's rows, then its training goodput."""
     campaign_dir = Path(stage_dir) / 'campaign'
-    campaign = read_json(campaign_dir / 'campaign.json', {})
-    interrupted = read_rows(campaign_dir / 'interrupted' / 'rank-0-updates.jsonl')
+    campaign = read_json(campaign_dir / 'campaign.json')
+    stop, restored = campaign['interrupted_update'], campaign['restored_update']
     resumed = read_rows(campaign_dir / 'resumed' / 'rank-0-updates.jsonl')
-    printer = RowPrinter(stage['warmup_updates'], stage['checkpoint_updates'])
-    recap = [printer.line(row) for row in interrupted][-5:]
-    stop = campaign.get('interrupted_update', INTERRUPT_AFTER)
-    restored = campaign.get('restored_update')
-    row = next((r for r in interrupted if r['update'] == stop), None)
+    row = next((r for r in read_rows(campaign_dir / 'interrupted' / 'rank-0-updates.jsonl')
+                if r['update'] == stop), None)
     completed = sorted(path.parent.name for path in (campaign_dir / 'interrupted' / 'checkpoints').glob(
         'update-*/COMPLETED.json'))
-    lines = [printer.header()] + recap + [describe(stage)]
-    lines.append(f'  stopped after update {stop}; '
-                 + (upload_sentence(row, stage['checkpoint_updates'], stop) if row else 'no row for the stop update'))
-    lines.append('  completed checkpoints at the stop: ' + (', '.join(completed) or 'none'))
-    lines.append(f"  resumed from update {restored}; first update after the resume: "
-                 f"{resumed[0]['update'] if resumed else 'none'}")
-    lines.append(f"  updates run twice: {restored + 1}-{stop} ({campaign.get('replayed_update_count')} updates)")
-    lines += lines_for(goodput_pairs(campaign, campaign, CAMPAIGN_INTERVAL, results))
-    return lines + lines_for(nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
+    return [('stopped after update', str(stop)),
+            ('durable update at the stop', 'no row for the stop update' if row is None else
+             str(row['durable_update']) + (', with an upload pending' if row['checkpoint_upload_pending'] else '')),
+            ('completed checkpoints at the stop', ', '.join(completed) or 'none'),
+            ('resumed from update', str(restored)),
+            ('first update after the resume', str(resumed[0]['update']) if resumed else 'none'),
+            ('updates run twice', f"{restored + 1}-{stop} ({campaign['replayed_update_count']} updates)")
+            ] + goodput_pairs(campaign, campaign, CAMPAIGN_INTERVAL, results)
+
+
+# The stage that ran the same updates before the change: its losses are printed beside the stage's own.
+LOSS_REFERENCE = {'sdpa': 'efa', 'restore': 'ckpt-sync'}
+
+
+def loss_lines(name, rows, reference, reference_rows):
+    """Rank 0's loss after each update beside the reference stage's loss after the same update."""
+    if not reference_rows:
+        return [f'  stage {reference} has no rows to compare losses with; run bash tools/run.sh {reference} first']
+    before = {row['update']: row['global_mean_loss'] for row in reference_rows}
+    lines = [f"{'update':>8}{f'loss ({name})':>17}{f'loss ({reference})':>19}{'difference':>13}"]
+    differences = []
+    for row in rows:
+        update, loss = row['update'], row['global_mean_loss']
+        if update in before:
+            differences.append(abs(loss - before[update]))
+            lines.append(f'{update:>8}{loss:>17.6f}{before[update]:>19.6f}{loss - before[update]:>+13.6f}')
+        else:
+            lines.append(f"{update:>8}{loss:>17.6f}{'-':>19}{'-':>13}")
+    if differences:
+        lines.append(f"largest loss difference over updates {rows[0]['update']}-{rows[-1]['update']}: "
+                     f'{max(differences):.6f}')
+    return lines
 
 
 def tail(path, count=40):
@@ -832,30 +795,31 @@ def failure_lines(stage, stage_dir, reason):
 
 
 def result_lines(stage, stage_dir, run, results, world):
-    """What the batch job prints when a stage has finished, by exit status."""
-    stage_dir = Path(stage_dir)
+    """What the batch job prints when a stage has finished: one table of labels and values, then the comparisons."""
+    stage_dir, results = Path(stage_dir), Path(results)
     code = run.get('exit_status')
     if code == 4:
         return failure_lines(stage, stage_dir, run.get('failure') or 'unknown')
-    if stage['kind'] == 'restore':
-        lines = restore_block(stage, stage_dir, read_rows(Path(results) / 'ckpt-sync' / 'train' / 'rank-0-updates.jsonl'), world)
+    train = stage_dir / 'train'
+    rows = read_rows(train / 'rank-0-updates.jsonl')
+    if stage['kind'] == 'profile':
+        pairs = [('traces', f"{len(list(train.glob('trace-rank-*.json')))} files in {train}"),
+                 ('read the profile with', f"python3 tools/profile-table.py {stage['name']}")]
+    elif stage['kind'] == 'restore':
+        pairs = [('first update after restore', str(rows[0]['update']) if rows else 'none')]
     elif stage['kind'] == 'interrupt':
-        lines = interrupt_block(stage, stage_dir, world, results)
-    elif stage['kind'] == 'profile':
-        lines = [describe(stage)] + lines_for(
-            [('traces', f"{len(list((stage_dir / 'train').glob('trace-rank-*.json')))} files in {stage_dir / 'train'}"),
-             ('read the profile with', f"python3 tools/profile-table.py {stage['name']}")]
-            + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
+        pairs = interrupt_pairs(stage_dir, results)
     else:
-        summary = read_json(stage_dir / 'train' / 'summary.json')
-        if not summary:
-            lines = [describe(stage), '  no summary.json']
-        else:
-            efa_rows = (read_rows(Path(results) / 'efa' / 'train' / 'rank-0-updates.jsonl')
-                        if stage['name'] == 'sdpa' else None)
-            lines = timed_block(stage, stage_dir, summary, read_ceilings(results), world, efa_rows, results)
-            if stage.get('change') and not stage['with_change']:
-                lines += [''] + try_comparison_lines(stage['change'], results)
+        # A timed stage without summary.json has a failed Summary check, printed below.
+        summary = read_json(train / 'summary.json')
+        pairs = timed_pairs(stage, summary, read_ceilings(results), world, results) if summary else []
+    lines = [describe(stage)] + lines_for(pairs + nccl_pairs(stage, stage_dir, world) + [efa_pair(stage_dir)])
+    reference = LOSS_REFERENCE.get(stage['name'])
+    if reference:
+        lines += loss_lines(stage['name'], rows, reference,
+                            read_rows(results / reference / 'train' / 'rank-0-updates.jsonl'))
+    if stage.get('change') and not stage['with_change']:
+        lines += [''] + try_comparison_lines(stage['change'], results)
     for check in run.get('checks', []):
         if not check['ok']:
             lines.append(f"check failed: {check['name']}: {check['detail']}")
