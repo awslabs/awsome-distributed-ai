@@ -7,7 +7,7 @@
 #   bash lab.sh status            the target's state in Slurm and the current incident
 #   bash lab.sh collect <n>       run check n of the health suite on the target as root
 #   bash lab.sh collect kernel    save the target's kernel log of this boot
-#   bash lab.sh collect recovery  save each GPU's recovery action
+#   bash lab.sh collect recovery  save each GPU's recovery action and the processes on the GPUs
 #   bash lab.sh reset-efa         drain the target and reset one of its EFA devices
 #                                 (job.sh incident 6 runs this beside the job)
 #   bash lab.sh recover           reboot the target through Slurm and wait until it is idle
@@ -49,7 +49,10 @@ case ${1:-} in
     collect)
         case ${2:-} in
             kernel) save kernel on_target sudo journalctl -k -b --utc -o short-iso-precise --no-pager ;;
-            recovery) save recovery on_target nvidia-smi --query-gpu=index,uuid,pci.bus_id,gpu_recovery_action --format=csv ;;
+            recovery)
+                save recovery on_target sh -c 'nvidia-smi --query-gpu=index,uuid,pci.bus_id,gpu_recovery_action --format=csv
+                    nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name --format=csv'
+                ;;
             [0-9])
                 save "check-$2" on_target sudo env PATH="/opt/amazon/efa/bin:$PATH" \
                     HEALTHCHECK_EXPECTED_EFA_COUNT="$HEALTHCHECK_EXPECTED_EFA_COUNT" \
