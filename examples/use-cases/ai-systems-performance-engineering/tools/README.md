@@ -24,12 +24,12 @@ Every shell tool first sources the environment file that provisioning writes, `$
 bash tools/check.sh
 ```
 
-Shows that the lab is prepared, one section at a time, and stops at the first command that fails:
+Shows that the lab is prepared, one section at a time, and stops at the first check that fails:
 
-1. A two-minute `srun` job on both GPU nodes prints each node's GPU count (`nvidia-smi -L`) and EFA device count (`/sys/class/infiniband`). Expect 8 and 2. The job waits in the queue while another job holds the nodes.
+1. A two-minute `srun` job on both GPU nodes prints each node's GPU count (`nvidia-smi -L`) and EFA device count (`/sys/class/infiniband`), and fails unless a node has 8 GPUs and at least 2 EFA devices. The job waits in the queue while another job holds the nodes.
 2. `df` of the stage directory, which must be FSx for Lustre with room for the checkpoints of Module 6.
 3. `ls -l` of the training image, the three datasets' `manifest.json` and the model's `model.safetensors`.
-4. The number of nodes whose Lustre and EFA counters Prometheus on the login node has. Expect 2 and 2.
+4. The number of nodes whose Lustre and EFA counters Prometheus on the login node has, which must be 2 and 2.
 5. Grafana's health address, then the Grafana URL, user and password.
 
 The last line is `All checks passed.` Exit status: 0; the failing command's status otherwise; 2 when the environment file is missing.
