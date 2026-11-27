@@ -24,9 +24,6 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, Dataset, TensorDataset, get_worker_info
 
-# The lab controls hand the launcher one incident profile; the launcher exports the
-# profile's settings as JSON in this variable. workload.py applies them as if they
-# were options, so they appear neither on the job's command line nor in its log.
 # Stack dumps go to the container's mount of RESULTS_DIR, which is node-local.
 STACK_DUMP_DIR = '/results'
 # How long a cache refill holds the dataset's lock.
@@ -36,7 +33,7 @@ REFILL_SECONDS = 2.0
 # and is what torch.use_deterministic_algorithms(True) requires for torch.mm.
 CUBLAS_DETERMINISTIC_WORKSPACES = (':4096:8', ':16:8')
 
-# Every rank's tensors live on its GPU. The CPU unit tests point this at the CPU.
+# Every rank's tensors live on its GPU.
 DEVICE = 'cuda'
 # A name that an interrupted save of a real job could leave, so that a listing of
 # the directory does not say the lab filled it. recover-checkpoint.py removes it.
@@ -64,10 +61,10 @@ def lab_line(lab_dir, text):
     The lab's own lines (the injector's, the DataLoader lifecycle) name what the lab
     did. When job.sh runs an incident without naming its cause, it passes --lab-dir:
     each process then appends these lines to its own file in that directory, with
-    the time, and common.sh collect_lab_records moves the files into the lab log
-    after the run. No part of them passes through the job's output, where lines of
-    several processes can merge. Each line is one write to a file no other process
-    writes, so it is never split.
+    the time. The files stay on the node, under the job's results directory. No
+    part of them passes through the job's output, where lines of several processes
+    can merge. Each line is one write to a file no other process writes, so it is
+    never split.
     """
     if not lab_dir:
         emit(text)
