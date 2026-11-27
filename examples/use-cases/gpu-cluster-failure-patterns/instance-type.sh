@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-# Read the physical host, never a participant-supplied instance-type variable.
+# The instance type of this host, from DMI or, where DMI gives none, from the instance metadata service.
 detect_instance_type() {
     local detected token
     detected=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || true)

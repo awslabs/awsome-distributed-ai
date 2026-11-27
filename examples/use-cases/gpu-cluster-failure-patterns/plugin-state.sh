@@ -17,7 +17,6 @@ case ${1:-} in
         fi
         [[ -f $plugin/libnccl-net-ofi.so ]]
         ;;
-    require-present) [[ -f $plugin/libnccl-net-ofi.so && ! -e $saved ]] ;;
-    *) echo 'Usage: plugin-state.sh hide|restore|require-present' >&2; exit 2 ;;
+    *) echo 'Usage: plugin-state.sh hide|restore' >&2; exit 2 ;;
 esac
 printf 'host=%s plugin_action=%s\n' "$(hostname)" "$1"
