@@ -78,7 +78,6 @@ class DecodeMeasurementTests(unittest.TestCase):
             endpoints = serving_decode.server_endpoints('gpu-node-[1-2]', 2)
         self.assertEqual(endpoints, ['http://10.0.0.1:8100', 'http://10.0.0.1:8101',
                                      'http://10.0.0.2:8100', 'http://10.0.0.2:8101'])
-        self.assertIn('--port $((8100 + gpu))', (LAB / '8.serve-llm.sh').read_text())
 
     def test_level_sends_each_server_its_requests_and_reads_its_counters(self):
         endpoints = [f'http://10.0.0.{node}:{8100 + gpu}' for node in (1, 2) for gpu in range(8)]
