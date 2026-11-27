@@ -286,4 +286,4 @@ PYTHONPATH=lib python3 -m unittest tests.test_workshop_tools tests.test_charts t
 
 The chart tests read the result files of the run on two `g7.48xlarge` of 2026-11-03 in `tests/fixtures/spain-20261103/`.
 
-The whole suite, `PYTHONPATH=lib python3 -m unittest discover -s tests -v`, also runs the trainer tests when `torch==2.9.1` and `transformers==4.57.6` are installed, and skips them otherwise.
+The whole suite, `PYTHONPATH=lib python3 -m unittest discover -s tests -v`, also runs the trainer tests when `torch` and `transformers` are installed, and skips them otherwise.

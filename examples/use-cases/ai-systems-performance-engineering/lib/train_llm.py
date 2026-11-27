@@ -163,11 +163,7 @@ def main():
     os.environ['HF_ENABLE_PARALLEL_LOADING'] = 'true' if args.parallel_model_loading else 'false'
     os.environ['HF_PARALLEL_LOADING_WORKERS'] = '3'
     cfg = json.loads(args.config.read_text())
-    if torch.__version__.split('+')[0] != '2.9.1':
-        raise ValueError('this recipe requires torch==2.9.1')
     import transformers
-    if transformers.__version__ != '4.57.6':
-        raise ValueError('this recipe requires transformers==4.57.6')
     rank = int(os.environ['RANK'])
     world = int(os.environ['WORLD_SIZE'])
     local = int(os.environ['LOCAL_RANK'])
