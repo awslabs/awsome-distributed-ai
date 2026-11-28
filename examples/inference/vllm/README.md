@@ -18,6 +18,7 @@ prefill/decode KV-cache transfer
 | Test case | Orchestrator | Description |
 | --- | --- | --- |
 | [`dsv3-uccl-nixl`](./dsv3-uccl-nixl) | EKS / HyperPod EKS | DeepSeek-V3 disaggregated inference (1P+ND) on `p5en.48xlarge` with vLLM 0.21.0, UCCL-EP, and NIXL over EFA. |
+| [`deepep-v2-gdaki-efa`](./deepep-v2-gdaki-efa) | EKS | Mixture-of-Experts (`Qwen3-30B-A3B-FP8`) with DeepEP-V2 expert-parallel all-to-all over EFA, built for the NCCL-GIN **GDAKI** (GPU-initiated) transport on `p5en.48xlarge`; GDAKI is not yet shown on hardware. The 2026-08-14 serving numbers are CPU proxy (eager at DP16/EP16 and DP32/EP32, non-eager at DP16/EP16). |
 | [`kimi-k2-multi-node`](./kimi-k2-multi-node) | EKS | Kimi K2 (FP8) on two `p5en.48xlarge` with vLLM 0.32: pipeline parallelism (PP2×TP8) or tensor parallelism (TP16) across the instances, or one instance (TP8). |
 
 ## Serving one model across instances
