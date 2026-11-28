@@ -19,6 +19,6 @@ requests==2.34.2
 safetensors==0.8.0
 tokenizers==0.22.2
 tqdm==4.70.0
-transformers==4.57.6
+transformers==5.10.1
 typing_extensions==4.16.0
 urllib3==2.7.0
