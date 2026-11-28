@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dsv4flash.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy: {type: Recreate}            # GPUs are fully allocated; avoid surge pods stuck Pending
+  progressDeadlineSeconds: 2700         # cold start ~12 min; above the startupProbe's 60 s + 40 min
+  selector:
+    matchLabels:
+      {{- include "dsv4flash.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dsv4flash.labels" . | nindent 8 }}
+        sglang-metrics: "true"          # scraped by the 'sglang' job of observability/prometheus-grafana/eks-managed-observability
+        component: unified              # copied to the metrics; that stack's PD dashboard uses prefill|decode
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: {{ .Release.Name }}
+      {{- include "dsv4flash.scheduling" . | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: modelserver
+        image: {{ .Values.image }}
+        command: ["python3", "-m", "sglang.launch_server"]
+        args:
+        - --model-path={{ .Values.model }}
+        - --served-model-name={{ .Values.model }}
+        - --host=0.0.0.0
+        - --port=8000
+        - --tp={{ .Values.tp }}
+        {{- range .Values.engineArgs }}
+        - {{ . }}
+        {{- end }}
+        env:
+        - {name: HF_HOME, value: /models/huggingface}
+        - {name: HF_HUB_OFFLINE, value: "1"}        # weights pre-staged on node NVMe; set HF_TOKEN + remove this to download
+        - {name: SGLANG_TIMEOUT_KEEP_ALIVE, value: "900"}   # default 5s closes pooled Envoy upstream connections
+        ports:
+        - {name: modelserver, containerPort: 8000, protocol: TCP}
+        resources:
+          requests:
+            {{- toYaml .Values.resources.requests | nindent 12 }}
+            nvidia.com/gpu: {{ .Values.tp }}
+          limits:
+            {{- toYaml .Values.resources.limits | nindent 12 }}
+            nvidia.com/gpu: {{ .Values.tp }}
+        startupProbe:                   # cold start ~12 min (weights ~5 min + CUDA graphs ~6 min)
+          httpGet: {path: /ready, port: modelserver}   # 503 until SGLang's warmup finishes; /v1/models answers earlier
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 80          # up to 40 min
+        readinessProbe:                 # only Ready pods enter the InferencePool
+          httpGet: {path: /ready, port: modelserver}
+          periodSeconds: 5
+          timeoutSeconds: 2
+          failureThreshold: 3
+        livenessProbe:
+          httpGet: {path: /health, port: modelserver}
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6           # /health can be slow under heavy prefill; be lenient
+        volumeMounts:
+        - {name: dshm, mountPath: /dev/shm}
+        - {name: models, mountPath: /models}
+        - {name: cache, mountPath: /root/.cache}   # flashinfer / deep_gemm / triton JIT caches (reused across restarts)
+      volumes:
+      - name: dshm
+        emptyDir: {medium: Memory, sizeLimit: 20Gi}
+      - name: models
+        hostPath: {path: {{ include "dsv4flash.nvmeHostPath" . | quote }}, type: Directory}
+      - name: cache
+        hostPath: {path: {{ printf "%s/sglang-jit-cache" (include "dsv4flash.nvmeHostPath" .) | quote }}, type: DirectoryOrCreate}

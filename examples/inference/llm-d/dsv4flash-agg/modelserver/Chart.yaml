@@ -1,0 +1,8 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+apiVersion: v2
+name: dsv4flash-sglang
+description: SGLang model servers (DeepSeek-V4-Flash-0731, TP2 replicas) for the llm-d router, plus an optional AIPerf client
+type: application
+version: 0.1.0
+appVersion: "v0.5.22"

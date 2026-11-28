@@ -1,0 +1,47 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# llm-d-router-standalone v1.0.0 overrides for DeepSeek-V4-Flash-0731 on SGLang.
+# Layered LAST, after the two verbatim llm-d v1.0.0 files in upstream/ (see ../README.md).
+# Changes vs the optimized-baseline guide: SGLang engine type + this sample's pod labels;
+# EPP log level v=1; affinity filter calibrated for DSV4-Flash TP2 on B200; EPP /metrics
+# served without auth for the llmd-epp scrape job.
+router:
+  modelServers:
+    type: sglang
+    targetPorts:
+    - number: 8000
+    matchLabels:
+      llm-d.ai/guide: dsv4flash          # must match guide in ../modelserver/values.yaml
+  monitoring:
+    prometheus:
+      auth:
+        # Chart passes --metrics-endpoint-auth=false to EPP, so the llmd-epp scrape job of
+        # observability/prometheus-grafana/eks-managed-observability needs no token.
+        enabled: false
+  epp:
+    flags:
+      v: 1
+    # EPP and the Envoy sidecar request 4 CPU each. Tolerating the GPU taint lets them land on
+    # the GPU node when the system nodes are too small (verified with m5.large system nodes);
+    # drop this if your system nodes have the room.
+    tolerations:
+    - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+    pluginsConfigFile: optimized-baseline-plugins.yaml
+    pluginsCustomConfig:
+      optimized-baseline-plugins.yaml: |
+        apiVersion: llm-d.ai/v1
+        kind: EndpointPickerConfig
+        plugins:
+        - type: approx-prefix-cache-producer
+        - type: inflight-load-producer
+        - type: prefix-cache-affinity-filter
+          parameters:
+            # default 15928 is calibrated for Qwen3-32B on 2xH100 (TP2); measured ~30k tok/s for DSV4-Flash TP2 on B200
+            peakPrefillThroughput: 30000
+        - type: token-load-scorer
+        schedulingProfiles:
+        - name: default
+          plugins:
+          - pluginRef: prefix-cache-affinity-filter
+          - pluginRef: token-load-scorer
