@@ -35,7 +35,7 @@ safetensors==0.6.2
 six==1.17.0
 tokenizers==0.22.1
 tqdm==4.70.1
-transformers==4.57.6
+transformers==5.10.1
 typing_extensions==4.16.0
 tzdata==2026.4
 urllib3==2.8.0

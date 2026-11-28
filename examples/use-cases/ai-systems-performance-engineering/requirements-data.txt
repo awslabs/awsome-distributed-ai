@@ -1,5 +1,5 @@
 # Preparation runs outside the training image; datasets requires this fsspec pin.
-transformers==4.57.6
+transformers==5.10.1
 huggingface-hub==0.36.0
 tokenizers==0.22.1
 safetensors==0.6.2
