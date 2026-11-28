@@ -6,4 +6,4 @@ safetensors==0.6.2
 numpy==2.2.6
 datasets==4.4.1
 fsspec==2025.10.0
-pyarrow==21.0.0
+pyarrow==23.0.1
