@@ -101,7 +101,7 @@ The block was checked with `gpus_per_worker` set to 4 and `efa_per_worker` set t
 
 ```bash
 export LAB_REPO=https://github.com/awslabs/awsome-distributed-ai.git
-export LAB_BRANCH=AIM345
+export LAB_BRANCH=main
 export LAB_WORKDIR="$HOME/aim345-lab-check"
 export LAB_CONFIG="$HOME/config.json"
 export LAB_REGION=us-west-2
