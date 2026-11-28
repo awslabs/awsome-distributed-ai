@@ -4,6 +4,6 @@ huggingface-hub==0.36.0
 tokenizers==0.22.1
 safetensors==0.6.2
 numpy==2.2.6
-datasets==4.4.1
+datasets==5.0.1
 fsspec==2025.10.0
 pyarrow==21.0.0
