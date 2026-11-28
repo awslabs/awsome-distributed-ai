@@ -1,6 +1,0 @@
-data
-results
-runtime
-*.sqsh
-.env
-__pycache__

@@ -1,3 +1,0 @@
-# Result files of the run of 2026-11-03
-
-The stage results of one participant session on two `g7.48xlarge` (16 GPUs, allocation 637) with companion commit `e7598475`, copied for the table test in `tests/test_progression_golden.py`. `baseline` and `efa` are the first runs of those stages, which the session's Module 2, 4 and 7 outputs show; a repeat later moved them to `attempts/`. Each `summary.json` keeps, of each rank's entry, only the rank numbers, the peak memory, the GPU name and the status; it leaves out the host names, the GPU UUIDs and the per-rank timings. The host names in the other files are the Slurm node names `gpu-g7-1` and `gpu-g7-2`. The profile traces are not included.
