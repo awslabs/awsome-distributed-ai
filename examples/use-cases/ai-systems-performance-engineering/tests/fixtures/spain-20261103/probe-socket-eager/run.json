@@ -1,0 +1,83 @@
+{
+  "stage": "probe-socket-eager",
+  "subcommand": "probe",
+  "invocation": "20261103T132220Z",
+  "stages": [
+    "probe-socket-eager"
+  ],
+  "plan": {
+    "name": "probe-socket-eager",
+    "subcommand": "probe",
+    "kind": "timed",
+    "transport": "socket",
+    "attention": "eager",
+    "saving": "none",
+    "config": "configs/smol-1024.json",
+    "data": "tokens-1024-160",
+    "sequence_length": 1024,
+    "updates": 5,
+    "warmup_updates": 1,
+    "global_batch": 32,
+    "checkpoint_updates": [
+      5
+    ],
+    "job_env": {
+      "LLM_TRANSPORT": "socket",
+      "ATTENTION": "eager",
+      "CHECKPOINT_MODE": "none"
+    }
+  },
+  "job_env": {
+    "LLM_TRANSPORT": "socket",
+    "ATTENTION": "eager",
+    "CHECKPOINT_MODE": "none"
+  },
+  "settings": {
+    "transport": "socket",
+    "attention": "eager",
+    "saving": "none"
+  },
+  "trainer_argv": [
+    "bash",
+    "2.run-llm.sh",
+    "--config",
+    "configs/smol-1024.json",
+    "--data",
+    "/data/tokens-1024-160",
+    "--model-path",
+    "/data/model",
+    "--attention-implementation",
+    "eager",
+    "--microbatch",
+    "1",
+    "--workers",
+    "2",
+    "--checkpoint-mode",
+    "none",
+    "--allocation-label",
+    "pcs-g7.48xlarge-2nodes-16gpu",
+    "--output",
+    "/results/probe-socket-eager/train"
+  ],
+  "config": "configs/smol-1024.json",
+  "data": "tokens-1024-160",
+  "allocation_id": "637",
+  "start_utc": 1793712140.1668632,
+  "status": "finished",
+  "end_utc": 1793712193.37014,
+  "launcher_exit": 0,
+  "exit_status": 0,
+  "checks": [
+    {
+      "name": "NCCL network",
+      "ok": true,
+      "detail": "launch.log"
+    },
+    {
+      "name": "Summary",
+      "ok": true,
+      "detail": "summary.json"
+    }
+  ],
+  "failure": null
+}
