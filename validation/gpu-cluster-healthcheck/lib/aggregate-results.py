@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Aggregate per-node GPU health check results into a cluster summary.
 
 Reads individual check result JSON files from a results directory and
