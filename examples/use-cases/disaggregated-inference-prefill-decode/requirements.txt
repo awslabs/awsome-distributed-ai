@@ -1,5 +1,5 @@
 anyio==4.15.1
-certifi==2026.7.22
+certifi==2026.10.18
 charset-normalizer==3.5.1
 filelock==3.32.5
 fsspec==2026.7.0
