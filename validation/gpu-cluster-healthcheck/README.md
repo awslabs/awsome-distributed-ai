@@ -20,8 +20,8 @@ The suite provides two operational modes: **lightweight checks** for regular use
 ### Installation
 
 ```bash
-# Clone the consolidated AIM344 review branch
-git clone --branch AIM344 --single-branch https://github.com/awslabs/awsome-distributed-ai.git
+# Clone the repository
+git clone https://github.com/awslabs/awsome-distributed-ai.git
 cd awsome-distributed-ai/validation/gpu-cluster-healthcheck
 
 # Make all scripts executable
@@ -33,7 +33,7 @@ chmod +x gpu-healthcheck.sh checks/*.sh slurm/*.sh slurm/examples/*.sh
 
 ### Assigned EFA interfaces
 
-This assigned-EFA change is included in the consolidated `AIM344` review branch, not a merged release or hardware qualification.
+This assigned-EFA change is not a hardware qualification.
 
 `g7e.48xlarge` has 8 GPUs, no NVLink, and up to 4 EFA interfaces. Its profile
 records that capability, not a claim that every launch attaches four. For a
@@ -49,7 +49,7 @@ G7 defaults. An explicitly empty value is invalid, not an absent assignment.
 GPU counts, correctness validation and existing bandwidth thresholds are unchanged.
 Two-interface results do not qualify four-interface performance.
 
-A missing `instance-profiles.conf` is a packaging error: this candidate stops
+A missing `instance-profiles.conf` is a packaging error: the suite stops
 profile loading and the check rather than continuing with defaults. This is an
 intentional fail-closed change, not preserved behavior. An unknown instance type
 with the profiles file present and no override still uses the existing defaults;
