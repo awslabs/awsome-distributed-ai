@@ -32,6 +32,15 @@ NVIDIA Resiliency Extension provides process-level fault tolerance:
 - **Straggler Detector**: Monitors GPU kernel timing across ranks to detect slow GPUs
 - **Checkpoint integration**: Saves model state to FSx for resume-on-restart
 
+## Variants
+
+This directory nests a distinct NeMo-RL example that shares the framework but targets a different
+communication mechanism and scale:
+
+| Variant | Focus | Scale |
+|---------|-------|-------|
+| [`deepep-v2-efa/`](./deepep-v2-efa) | NeMo-RL (GRPO) + Megatron-LM MoE expert-parallel all-to-all over **DeepEP V2's NCCL-GIN CPU-proxy** on **AWS EFA** (`Qwen3-30B-A3B`); built NGC-from-scratch. See its README for the measured-vs-staged breakdown. | 2× p5.48xlarge (16× H100) or p5en (H200) |
+
 ## Architecture
 
 ```
