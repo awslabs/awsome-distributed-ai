@@ -21,4 +21,4 @@ tokenizers==0.22.2
 tqdm==4.70.0
 transformers==4.57.6
 typing_extensions==4.16.0
-urllib3==2.7.0
+urllib3==2.8.0
