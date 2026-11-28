@@ -1,0 +1,55 @@
+# Ray TorchTrainer on HyperPod — Training Configuration (FSx variant)
+#
+# The FSx for Lustre file system is mounted at /mnt/fsx on the Studio space and on every Ray pod.
+# All paths sit under /mnt/fsx/ray-sft-lora, which the image's user (sagemaker-user) must own;
+# see "Prepare the FSx folder" in the README.
+
+# Ray finds earlier run state by (storage_path, run_name). Use a new name for each
+# experiment; resubmit with the same name to resume an interrupted run.
+run_name: "qwen3-medical-run-1"
+storage_path: "/mnt/fsx/ray-sft-lora/ray_results"
+
+# Cluster scaling — 1 worker is sufficient for Qwen3-0.6B with LoRA.
+num_workers: 1
+num_gpus_per_worker: 1
+cpus_per_worker: 8   # lower this on instances with fewer than 8 allocatable vCPUs
+use_gpu: true
+
+# Resilience — HyperPod auto-recovers failed nodes; FailureConfig restarts the workers,
+# which resume from the last reported checkpoint
+max_failures: 3
+
+# Model & data
+script_args:
+  model_id: "Qwen/Qwen3-0.6B"
+  train_dataset_path: "/mnt/fsx/ray-sft-lora/datasets/train"
+  val_dataset_path: "/mnt/fsx/ray-sft-lora/datasets/val"
+  checkpoint_dir: "/mnt/fsx/ray-sft-lora/checkpoints"
+  output_dir: "/mnt/fsx/ray-sft-lora/output"
+  attn_implementation: "sdpa"   # flash_attention_2 needs the flash-attn package
+  load_in_4bit: false
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  merge_weights: true
+
+# SFT training config
+sft_config:
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 2
+  num_train_epochs: 2
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 100
+  max_length: 2048
+  gradient_checkpointing: true
+  # FSDP — only enabled when set here. Not tested in this example.
+  # fsdp: "full_shard auto_wrap"
+  # fsdp_config:
+  #   backward_prefetch: "backward_pre"
+  #   forward_prefetch: true
+  #   use_orig_params: true
